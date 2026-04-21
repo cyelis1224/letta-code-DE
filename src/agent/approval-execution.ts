@@ -3,7 +3,6 @@
 import * as path from "node:path";
 import type {
   ApprovalReturn,
-  TextContent,
   ToolReturn,
 } from "@letta-ai/letta-client/resources/agents/messages";
 import type { ToolReturnMessage } from "@letta-ai/letta-client/resources/tools";
@@ -15,32 +14,6 @@ import {
   type ToolExecutionResult,
   type ToolReturnContent,
 } from "../tools/manager";
-
-/**
- * Append a user-provided reason to tool return content so the agent sees it.
- * Used to forward approval messages (e.g. worktree instructions) into the
- * tool return that goes to the LLM context.
- */
-function appendReasonToToolReturn(
-  content: ToolReturnContent,
-  reason: string | undefined,
-): ToolReturnContent {
-  if (!reason || reason.length === 0) return content;
-  const suffix = `\n\n${reason}`;
-  if (typeof content === "string") {
-    return content + suffix;
-  }
-  // Multimodal: append to the last text part or add a new one
-  const lastText = [...content]
-    .reverse()
-    .find((p): p is TextContent => p.type === "text");
-  if (lastText) {
-    return content.map((p) =>
-      p === lastText ? { ...p, text: p.text + suffix } : p,
-    );
-  }
-  return [...content, { type: "text" as const, text: reason }];
-}
 
 /**
  * Extract displayable text from tool return content (for UI display).
@@ -254,10 +227,7 @@ async function executeSingleDecision(
       return {
         type: "tool",
         tool_call_id: decision.approval.toolCallId,
-        tool_return: appendReasonToToolReturn(
-          decision.precomputedResult.toolReturn,
-          decision.reason,
-        ),
+        tool_return: decision.precomputedResult.toolReturn,
         status: decision.precomputedResult.status,
         stdout: decision.precomputedResult.stdout,
         stderr: decision.precomputedResult.stderr,
@@ -318,10 +288,7 @@ async function executeSingleDecision(
       return {
         type: "tool",
         tool_call_id: decision.approval.toolCallId,
-        tool_return: appendReasonToToolReturn(
-          toolResult.toolReturn,
-          decision.reason,
-        ),
+        tool_return: toolResult.toolReturn, // Full multimodal content for backend
         status: toolResult.status,
         stdout: toolResult.stdout,
         stderr: toolResult.stderr,
