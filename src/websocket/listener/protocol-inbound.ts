@@ -40,6 +40,7 @@ import type {
   ListInDirectoryCommand,
   ListMemoryCommand,
   ListModelsCommand,
+  MemoryCommitDiffCommand,
   MemoryFileAtRefCommand,
   MemoryHistoryCommand,
   ReadFileCommand,
@@ -463,6 +464,24 @@ export function isMemoryHistoryCommand(
     typeof c.request_id === "string" &&
     typeof c.agent_id === "string" &&
     (c.file_path === undefined || typeof c.file_path === "string")
+  );
+}
+
+export function isMemoryCommitDiffCommand(
+  value: unknown,
+): value is MemoryCommitDiffCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+    agent_id?: unknown;
+    sha?: unknown;
+  };
+  return (
+    c.type === "memory_commit_diff" &&
+    typeof c.request_id === "string" &&
+    typeof c.agent_id === "string" &&
+    typeof c.sha === "string"
   );
 }
 
@@ -1345,6 +1364,7 @@ export function parseServerMessage(
       isListMemoryCommand(parsed) ||
       isMemoryHistoryCommand(parsed) ||
       isMemoryFileAtRefCommand(parsed) ||
+      isMemoryCommitDiffCommand(parsed) ||
       isEnableMemfsCommand(parsed) ||
       isListModelsCommand(parsed) ||
       isUpdateModelCommand(parsed) ||
