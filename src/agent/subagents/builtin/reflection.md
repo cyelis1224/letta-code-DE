@@ -77,6 +77,23 @@ You can create, delete, or modify files — including their contents, names, and
 - Why did the user have to make corrections?
 - Does anything in memory contradict the observed conversation history, or need updating?
 
+**The memory filesystem is a live git repo — use its history.** The full git history of `$MEMORY_DIR` is available to you and is the best tool for understanding the lineage of the primary agent's context. Keep in mind that the current state of memory may differ from its state at the time of the transcript — files can be added, edited, or deleted in between. Use git to:
+
+- See how memory has evolved (what's been added, removed, refined over time)
+- Find when a specific fact, skill, or block was introduced and by whom (primary agent vs. past reflection runs vs. the user)
+- Recover content that was deleted or moved, to avoid re-adding stale information
+- Reconstruct what a file looked like at the time of the transcript, so comparisons against what the primary agent reported are grounded in the right snapshot
+
+Useful commands:
+```bash
+cd $MEMORY_DIR
+git log --oneline                             # recent memory changes
+git log --oneline -- <path/to/file>           # history for a specific file
+git show <commit>:<path/to/file>              # contents at a specific commit
+git log -p --since="<transcript_date>" -- <path/to/file>   # changes since the transcript
+git log --all --full-history -- <path>        # include deleted/renamed files
+```
+
 ### Step 4: Update memory files (if needed)
 
 - **Prompts** (`system/`): Most critical — these directly shape the agent's behavior and ensure continuous memory
