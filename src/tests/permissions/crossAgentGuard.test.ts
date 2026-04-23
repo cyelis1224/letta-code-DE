@@ -10,6 +10,7 @@ import {
   resolveAllowedAgents,
 } from "../../permissions/crossAgentGuard";
 import { permissionMode } from "../../permissions/mode";
+import { sessionPermissions } from "../../permissions/session";
 
 const HOME = homedir();
 const SELF = "agent-self";
@@ -72,12 +73,14 @@ beforeEach(() => {
   process.env.AGENT_ID = SELF;
   cliPermissions.clear();
   permissionMode.reset();
+  sessionPermissions.clear();
 });
 
 afterEach(() => {
   restoreEnv(baselineEnv);
   cliPermissions.clear();
   permissionMode.reset();
+  sessionPermissions.clear();
 });
 
 // ---------------------------------------------------------------------------
@@ -317,9 +320,42 @@ describe("evaluateCrossAgentGuard", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
     expect(result?.matchedRule).toBe("cross-agent guard");
     expect(result?.offendingAgentIds).toEqual([OTHER]);
     expect(result?.reason).toMatch(/cross-agent memory guard/);
+  });
+
+  test("single-agent Read targets downgrade to ask", () => {
+    const result = evaluateCrossAgentGuard(
+      "Read",
+      { file_path: otherMemory("system/a.md") },
+      "/tmp",
+    );
+    expect(result).not.toBeNull();
+    expect(result?.decision).toBe("ask");
+    expect(result?.offendingAgentIds).toEqual([OTHER]);
+    expect(result?.reason).toMatch(/requires approval/);
+  });
+
+  test("single-agent Grep targets downgrade to ask", () => {
+    const result = evaluateCrossAgentGuard(
+      "Grep",
+      { pattern: "agent", path: otherMemory() },
+      "/tmp",
+    );
+    expect(result).not.toBeNull();
+    expect(result?.decision).toBe("ask");
+  });
+
+  test("single-agent read-only Bash targets downgrade to ask", () => {
+    const result = evaluateCrossAgentGuard(
+      "Bash",
+      { command: `cat ${otherMemory()}/system/a.md` },
+      "/tmp",
+    );
+    expect(result).not.toBeNull();
+    expect(result?.decision).toBe("ask");
   });
 
   test("passes through when other agent is in LETTA_MEMORY_SCOPE", () => {
@@ -359,22 +395,24 @@ describe("evaluateCrossAgentGuard", () => {
     expect(result?.offendingAgentIds).toEqual([THIRD]);
   });
 
-  test("reads are gated (not just writes)", () => {
+  test("cross-agent writes remain denied", () => {
     const result = evaluateCrossAgentGuard(
-      "Read",
+      "Write",
       { file_path: otherMemory("system/x.md") },
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
-  test("bash read-only against other agent's memory is gated", () => {
+  test("bash broad enumeration stays denied", () => {
     const result = evaluateCrossAgentGuard(
       "Bash",
-      { command: `cat ${otherMemory()}/system/x.md` },
+      { command: "ls ~/.letta/agents" },
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 });
 
@@ -435,15 +473,9 @@ describe("checkPermission integration", () => {
     expect(result.decision).toBe("allow");
   });
 
-  test("reads against another agent's memory are denied across all modes", () => {
-    const modes = [
-      "default",
-      "acceptEdits",
-      "plan",
-      "memory",
-      "bypassPermissions",
-    ] as const;
-    for (const mode of modes) {
+  test("single-agent cross-agent reads ask in ordinary modes and allow in elevated read modes", () => {
+    const askModes = ["default", "acceptEdits"] as const;
+    for (const mode of askModes) {
       permissionMode.setMode(mode);
       const result = checkPermission(
         "Read",
@@ -451,9 +483,36 @@ describe("checkPermission integration", () => {
         permissions,
         "/tmp",
       );
-      expect(result.decision).toBe("deny");
+      expect(result.decision).toBe("ask");
       expect(result.matchedRule).toBe("cross-agent guard");
     }
+
+    permissionMode.setMode("plan");
+    const planResult = checkPermission(
+      "Read",
+      { file_path: otherMemory("system/a.md") },
+      permissions,
+      "/tmp",
+    );
+    expect(planResult.decision).toBe("allow");
+
+    permissionMode.setMode("memory");
+    const memoryResult = checkPermission(
+      "Read",
+      { file_path: otherMemory("system/a.md") },
+      permissions,
+      "/tmp",
+    );
+    expect(memoryResult.decision).toBe("allow");
+
+    permissionMode.setMode("bypassPermissions");
+    const bypassResult = checkPermission(
+      "Read",
+      { file_path: otherMemory("system/a.md") },
+      permissions,
+      "/tmp",
+    );
+    expect(bypassResult.decision).toBe("allow");
   });
 
   test("own-memory access is unaffected by guard in every mode", () => {
@@ -478,11 +537,22 @@ describe("checkPermission integration", () => {
     }
   });
 
-  test("bash against another agent's memory is denied even in bypassPermissions", () => {
+  test("read-only bash against another agent's memory allows once bypassPermissions is enabled", () => {
     permissionMode.setMode("bypassPermissions");
     const result = checkPermission(
       "Bash",
       { command: `git -C ${otherMemory()} log` },
+      permissions,
+      "/tmp",
+    );
+    expect(result.decision).toBe("allow");
+  });
+
+  test("cross-agent write bash remains denied even in bypassPermissions", () => {
+    permissionMode.setMode("bypassPermissions");
+    const result = checkPermission(
+      "Bash",
+      { command: `git -C ${otherMemory()} push` },
       permissions,
       "/tmp",
     );
@@ -502,6 +572,53 @@ describe("checkPermission integration", () => {
     // acceptEdits allows writes, and the guard passes since OTHER is scoped.
     expect(result.decision).toBe("allow");
   });
+
+  test("persisted allow rules can authorize targeted cross-agent reads", () => {
+    const result = checkPermission(
+      "Read",
+      { file_path: otherMemory("system/a.md") },
+      {
+        allow: [`Read(//${otherMemory("system").replace(/^\/+/, "")}/**)`],
+        deny: [],
+        ask: [],
+      },
+      "/tmp",
+    );
+    expect(result.decision).toBe("allow");
+  });
+
+  test("session allow rules can authorize targeted cross-agent reads", () => {
+    sessionPermissions.addRule(
+      `Read(//${otherMemory("system").replace(/^\/+/, "")}/**)`,
+      "allow",
+    );
+    const result = checkPermission(
+      "Read",
+      { file_path: otherMemory("system/a.md") },
+      permissions,
+      "/tmp",
+    );
+    expect(result.decision).toBe("allow");
+    expect(result.matchedRule).toContain("session");
+  });
+
+  test("specific foreign-agent searches ask instead of denying", () => {
+    const grepResult = checkPermission(
+      "Grep",
+      { pattern: "secret", path: otherMemory() },
+      permissions,
+      "/tmp",
+    );
+    expect(grepResult.decision).toBe("ask");
+
+    const listResult = checkPermission(
+      "ListDir",
+      { path: otherMemory() },
+      permissions,
+      "/tmp",
+    );
+    expect(listResult.decision).toBe("ask");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -520,6 +637,7 @@ describe("shell bypass regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
     expect(result?.matchedRule).toBe("cross-agent guard");
   });
 
@@ -532,6 +650,7 @@ describe("shell bypass regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
   test("command substitution: assigning a computed target path is denied", () => {
@@ -544,6 +663,7 @@ describe("shell bypass regression tests", () => {
     ].join("\n");
     const result = evaluateCrossAgentGuard("Bash", { command }, "/tmp");
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
   test("command substitution variant 2 (find -name memory) is denied", () => {
@@ -555,6 +675,7 @@ describe("shell bypass regression tests", () => {
     ].join("\n");
     const result = evaluateCrossAgentGuard("Bash", { command }, "/tmp");
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
   test("literal-but-unknown agent ID in quoted assignment is denied", () => {
@@ -567,6 +688,7 @@ describe("shell bypass regression tests", () => {
     ].join("\n");
     const result = evaluateCrossAgentGuard("Bash", { command }, "/tmp");
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
     expect(result?.offendingAgentIds).toContain(
       "agent-0037d3d9-389b-4c02-82ae-d77aa29d1ada",
     );
@@ -579,6 +701,7 @@ describe("shell bypass regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("ask");
   });
 
   test("self-targeting references using ${AGENT_ID} pass through", () => {
@@ -633,6 +756,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
     expect(result?.matchedRule).toBe("cross-agent guard");
   });
 
@@ -643,6 +767,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
   test("Glob pointed at a specific foreign agent's root (no /memory) is denied", () => {
@@ -652,6 +777,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("ask");
     expect(result?.offendingAgentIds).toContain(OTHER);
   });
 
@@ -662,6 +788,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("ask");
     expect(result?.offendingAgentIds).toContain(OTHER);
   });
 
@@ -674,6 +801,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
   test("Glob with path=$HOME (ancestor of agents tree) is denied — recursive walk would enter it", () => {
@@ -683,6 +811,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
   test("Grep on the filesystem root is denied for the same reason", () => {
@@ -696,6 +825,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 
   test("Glob on self memory is allowed", () => {
@@ -735,6 +865,7 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("ask");
     expect(result?.offendingAgentIds).toContain(OTHER);
   });
 
@@ -752,5 +883,6 @@ describe("Grep/Glob ancestor-path regression tests", () => {
       "/tmp",
     );
     expect(result).not.toBeNull();
+    expect(result?.decision).toBe("deny");
   });
 });

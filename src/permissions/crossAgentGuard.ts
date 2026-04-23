@@ -20,6 +20,7 @@ import {
   parseScopeList,
   resolveScopedTargetPath,
 } from "./memoryScope";
+import { isReadOnlyShellCommand } from "./readOnlyShell";
 import { splitShellSegments, tokenizeShellWords } from "./shellAnalysis";
 
 // --------------------------------------------------------------------------
@@ -120,6 +121,14 @@ function normalizePathForCompare(path: string): string {
   return normalized.length === 0 ? "/" : normalized;
 }
 
+function isConcreteAgentPathSegment(segment: string): boolean {
+  if (!segment || segment === "." || segment === "..") {
+    return false;
+  }
+
+  return !/[*?[\]{}$%]/.test(segment);
+}
+
 /**
  * Classification of a path relative to the agents tree:
  *  - `outside`     — path is unrelated to the agents tree.
@@ -157,6 +166,9 @@ export function classifyAgentsTreePath(
     const rest = normalized.slice(root.length + 1);
     const slash = rest.indexOf("/");
     const id = slash === -1 ? rest : rest.slice(0, slash);
+    if (!isConcreteAgentPathSegment(id)) {
+      return { kind: "agents-root" };
+    }
     return { kind: "agent", id };
   }
 
@@ -577,12 +589,13 @@ export function extractTargetAgentPaths(
 // --------------------------------------------------------------------------
 
 export interface CrossAgentGuardResult {
+  decision: "deny" | "ask";
   matchedRule: "cross-agent guard";
   reason: string;
   offendingAgentIds: string[];
 }
 
-function buildReason(
+function buildDenyReason(
   offending: string[],
   allowed: ResolvedAllowedAgents,
 ): string {
@@ -595,6 +608,61 @@ function buildReason(
     `Allowed: ${allowedDesc}. ` +
     `Set LETTA_MEMORY_SCOPE or pass --memory-scope to opt in.`
   );
+}
+
+function buildAskReason(
+  offending: string[],
+  allowed: ResolvedAllowedAgents,
+): string {
+  const offendingDesc = offending.join(", ");
+  const allowedList = [...allowed.ids];
+  const allowedDesc =
+    allowedList.length > 0 ? allowedList.join(", ") : "(none)";
+  return (
+    `Cross-agent memory access requires approval (${offendingDesc}). ` +
+    `Allowed without approval: ${allowedDesc}. ` +
+    `Approve to continue, or set LETTA_MEMORY_SCOPE / --memory-scope to opt in.`
+  );
+}
+
+function isReadOnlyCrossAgentAttempt(
+  toolName: string,
+  toolArgs: ToolArgs,
+): boolean {
+  const canonical = canonicalToolName(toolName);
+  if (
+    canonical === "Read" ||
+    canonical === "Glob" ||
+    canonical === "Grep" ||
+    canonical === "ListDir"
+  ) {
+    return true;
+  }
+
+  if (canonical !== "Bash") {
+    return false;
+  }
+
+  const command = extractShellCommand(toolArgs);
+  return Boolean(
+    command && isReadOnlyShellCommand(command, { allowExternalPaths: true }),
+  );
+}
+
+function shouldAskForCrossAgentAccess(
+  offending: Set<string>,
+  toolName: string,
+  toolArgs: ToolArgs,
+): boolean {
+  if (!isReadOnlyCrossAgentAttempt(toolName, toolArgs)) {
+    return false;
+  }
+
+  if (offending.has(UNRESOLVED_AGENT_ID)) {
+    return false;
+  }
+
+  return offending.size === 1;
 }
 
 /**
@@ -656,9 +724,16 @@ export function evaluateCrossAgentGuard(
   }
 
   const offendingList = [...offending];
+  const decision = shouldAskForCrossAgentAccess(offending, toolName, toolArgs)
+    ? "ask"
+    : "deny";
   return {
+    decision,
     matchedRule: "cross-agent guard",
-    reason: buildReason(offendingList, allowed),
+    reason:
+      decision === "ask"
+        ? buildAskReason(offendingList, allowed)
+        : buildDenyReason(offendingList, allowed),
     offendingAgentIds: offendingList,
   };
 }

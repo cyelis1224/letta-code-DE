@@ -115,9 +115,10 @@ function shouldAttachTrace(result: PermissionCheckResult): boolean {
  * Check permission for a tool execution.
  *
  * Decision logic:
- * 0. Cross-agent guard (unbypassable) → DENY any tool call targeting
- *    another agent's memory dir unless that agent is in allowed_agents
- *    (self ∪ LETTA_MEMORY_SCOPE ∪ --memory-scope)
+ * 0. Cross-agent guard:
+ *    - hard-deny writes / broad enumeration against another agent's memory
+ *    - soft-ask targeted single-agent read-only access unless already
+ *      authorized by normal rules or explicit memory scope
  * 1. Check deny rules from settings (first match wins) → DENY
  * 2. Check CLI disallowedTools (--disallowedTools flag) → DENY
  * 3. Check permission mode (--permission-mode flag) → ALLOW or DENY
@@ -266,25 +267,30 @@ function checkPermissionForEngine(
   const workingDirectoryTools =
     engine === "v2" ? WORKING_DIRECTORY_TOOLS_V2 : WORKING_DIRECTORY_TOOLS_V1;
 
-  // Cross-agent guard — denies any tool call targeting another agent's
-  // memory unless that agent is in the allowed set. Unbypassable by any
-  // mode, rule, or flag.
+  // Cross-agent guard:
+  // - hard-denies writes / broad enumeration against another agent memory
+  // - marks targeted single-agent read-only access for a later ask fallback
   const guardResult = evaluateCrossAgentGuard(
     toolName,
     toolArgs,
     workingDirectory,
     { currentAgentId: agentId },
   );
-  if (guardResult) {
+  let pendingCrossAgentAsk = false;
+  if (guardResult?.decision === "deny") {
     traceEvent(trace, "cross-agent-guard", guardResult.reason);
     return {
       result: {
-        decision: "deny",
+        decision: guardResult.decision,
         matchedRule: guardResult.matchedRule,
         reason: guardResult.reason,
       },
       trace,
     };
+  }
+  if (guardResult?.decision === "ask") {
+    pendingCrossAgentAsk = true;
+    traceEvent(trace, "cross-agent-guard-pending", guardResult.reason);
   }
 
   if (permissions.deny) {
@@ -533,6 +539,18 @@ function checkPermissionForEngine(
         };
       }
     }
+  }
+
+  if (pendingCrossAgentAsk && guardResult) {
+    traceEvent(trace, "cross-agent-guard-ask", guardResult.reason);
+    return {
+      result: {
+        decision: "ask",
+        matchedRule: guardResult.matchedRule,
+        reason: guardResult.reason,
+      },
+      trace,
+    };
   }
 
   const defaultDecision = getDefaultDecision(toolName, toolArgs);
