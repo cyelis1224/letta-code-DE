@@ -28,4 +28,21 @@ describe("resizeImageIfNeeded", () => {
     expect(metadata.width).toBe(result.width);
     expect(metadata.height).toBe(result.height);
   });
+
+  test("canonicalizes passthrough media types from decoded image bytes", async () => {
+    const pngBuffer = await sharp({
+      create: {
+        width: 32,
+        height: 32,
+        channels: 3,
+        background: { r: 90, g: 40, b: 180 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    const result = await resizeImageIfNeeded(pngBuffer, "image/tiff");
+
+    expect(result.mediaType).toBe("image/png");
+  });
 });

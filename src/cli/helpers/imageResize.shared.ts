@@ -15,6 +15,32 @@ export interface ResizeResult {
   resized: boolean;
 }
 
+export function mediaTypeForDecodedImageFormat(
+  format?: string | null,
+): string | null {
+  const normalized = format?.trim().toLowerCase();
+  switch (normalized) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    default:
+      return null;
+  }
+}
+
+export function canonicalizeOutputMediaType(
+  decodedFormat: string | null | undefined,
+  fallbackMediaType: string,
+): string {
+  return mediaTypeForDecodedImageFormat(decodedFormat) ?? fallbackMediaType;
+}
+
 export function assertImageHasDimensions(
   width: number,
   height: number,

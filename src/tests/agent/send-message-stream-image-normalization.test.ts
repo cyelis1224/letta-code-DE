@@ -133,4 +133,79 @@ describe("sendMessageStream image normalization", () => {
       ALLOWED_ANTHROPIC_MEDIA_TYPES.has(imagePart?.source?.media_type ?? ""),
     ).toBe(true);
   });
+
+  test("normalizes direct shared-send image payloads before the API request", async () => {
+    await sendMessageStream(
+      "conv-test",
+      [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/heic",
+                data: TEST_PNG_BASE64,
+              },
+            },
+          ],
+        },
+      ],
+      {
+        preparedToolContext: {
+          contextId: "ctx-test-direct",
+          clientTools: [],
+          loadedToolNames: [],
+        },
+      },
+    );
+
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    const requestMessages = (capturedRequestBody as { messages?: unknown[] })
+      .messages;
+    const firstMessage = requestMessages?.[0] as {
+      content?: Array<{
+        type: string;
+        source?: { type: string; media_type: string; data: string };
+      }>;
+    };
+    const imagePart = firstMessage.content?.find(
+      (part) => part.type === "image",
+    );
+
+    expect(imagePart?.source?.media_type).toBe("image/png");
+  });
+
+  test("fails closed before the API request when base64 image bytes are invalid", async () => {
+    await expect(
+      sendMessageStream(
+        "conv-test",
+        [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/tiff",
+                  data: Buffer.from("not-an-image", "utf8").toString("base64"),
+                },
+              },
+            ],
+          },
+        ],
+        {
+          preparedToolContext: {
+            contextId: "ctx-test-invalid",
+            clientTools: [],
+            loadedToolNames: [],
+          },
+        },
+      ),
+    ).rejects.toThrow();
+
+    expect(createMessage).not.toHaveBeenCalled();
+  });
 });
