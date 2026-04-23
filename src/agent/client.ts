@@ -21,6 +21,13 @@ let lastSDKDiagnostic: SDKDiagnostic | null = null;
 // whenever the OAuth refresh obtains a new token. Used as a fallback so
 // transient keychain failures don't crash the process mid-session.
 let _cachedApiKey: string | undefined;
+let _testClientOverride: (() => Promise<unknown>) | null = null;
+
+export function __testOverrideGetClient(
+  factory: (() => Promise<unknown>) | null,
+): void {
+  _testClientOverride = factory;
+}
 
 function safeDiagnosticString(value: unknown): string {
   if (value === null || value === undefined) {
@@ -111,6 +118,10 @@ export function getServerUrl(): string {
 }
 
 export async function getClient() {
+  if (_testClientOverride) {
+    return (await _testClientOverride()) as Letta;
+  }
+
   const baseSettings = settingsManager.getSettings();
   const cachedTokens = settingsManager.getCachedSecureTokens();
   const cachedSettings: Settings = {

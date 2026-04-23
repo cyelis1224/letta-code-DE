@@ -10,6 +10,7 @@ import {
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { __testOverrideGetClient } from "../../agent/client";
 import { translatePasteForImages } from "../../cli/helpers/clipboard";
 import {
   buildMessageContentFromDisplay,
@@ -37,19 +38,6 @@ const createMessage = mock(async (_conversationId: string, body: unknown) => {
   } as AsyncIterable<unknown>;
 });
 
-mock.module("../../agent/client", () => ({
-  getClient: async () => ({
-    conversations: {
-      messages: {
-        create: createMessage,
-      },
-    },
-  }),
-  getServerUrl: () => "http://localhost:8283",
-  consumeLastSDKDiagnostic: () => null,
-  clearLastSDKDiagnostic: () => {},
-}));
-
 const { sendMessageStream } = await import("../../agent/message");
 
 describe("sendMessageStream image normalization", () => {
@@ -59,6 +47,13 @@ describe("sendMessageStream image normalization", () => {
   beforeEach(() => {
     capturedRequestBody = null;
     createMessage.mockClear();
+    __testOverrideGetClient(async () => ({
+      conversations: {
+        messages: {
+          create: createMessage,
+        },
+      },
+    }));
     tempRoot = mkdtempSync(join(tmpdir(), "letta-image-send-"));
     displayText = "";
   });
@@ -70,6 +65,7 @@ describe("sendMessageStream image normalization", () => {
     if (tempRoot) {
       rmSync(tempRoot, { recursive: true, force: true });
     }
+    __testOverrideGetClient(null);
   });
 
   afterAll(() => {
