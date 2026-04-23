@@ -266,6 +266,9 @@ function checkPermissionForEngine(
   const sessionRules = sessionPermissions.getRules();
   const workingDirectoryTools =
     engine === "v2" ? WORKING_DIRECTORY_TOOLS_V2 : WORKING_DIRECTORY_TOOLS_V1;
+  const effectiveMode = modeState?.mode ?? permissionMode.getMode();
+  const effectivePlanFilePath =
+    modeState?.planFilePath ?? permissionMode.getPlanFilePath();
 
   // Cross-agent guard:
   // - hard-denies writes / broad enumeration against another agent memory
@@ -289,6 +292,20 @@ function checkPermissionForEngine(
     };
   }
   if (guardResult?.decision === "ask") {
+    if (effectiveMode === "plan") {
+      const reason =
+        `${guardResult.reason} ` +
+        `Plan mode auto-denies cross-agent memory access to avoid interactive approval prompts.`;
+      traceEvent(trace, "cross-agent-guard-plan-deny", reason);
+      return {
+        result: {
+          decision: "deny",
+          matchedRule: guardResult.matchedRule,
+          reason,
+        },
+        trace,
+      };
+    }
     pendingCrossAgentAsk = true;
     traceEvent(trace, "cross-agent-guard-pending", guardResult.reason);
   }
@@ -340,9 +357,6 @@ function checkPermissionForEngine(
 
   // Use the scoped permission mode state when available (listener/remote mode),
   // otherwise fall back to the global singleton (local/CLI mode).
-  const effectiveMode = modeState?.mode ?? permissionMode.getMode();
-  const effectivePlanFilePath =
-    modeState?.planFilePath ?? permissionMode.getPlanFilePath();
   const modeOverride = permissionMode.checkModeOverride(
     toolName,
     toolArgs,

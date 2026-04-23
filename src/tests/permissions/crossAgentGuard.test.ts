@@ -473,7 +473,7 @@ describe("checkPermission integration", () => {
     expect(result.decision).toBe("allow");
   });
 
-  test("single-agent cross-agent reads ask in ordinary modes and allow in elevated read modes", () => {
+  test("single-agent cross-agent reads ask in ordinary modes, deny in plan mode, and allow in elevated read modes", () => {
     const askModes = ["default", "acceptEdits"] as const;
     for (const mode of askModes) {
       permissionMode.setMode(mode);
@@ -494,7 +494,11 @@ describe("checkPermission integration", () => {
       permissions,
       "/tmp",
     );
-    expect(planResult.decision).toBe("allow");
+    expect(planResult.decision).toBe("deny");
+    expect(planResult.matchedRule).toBe("cross-agent guard");
+    expect(planResult.reason).toMatch(
+      /Plan mode auto-denies cross-agent memory access/,
+    );
 
     permissionMode.setMode("memory");
     const memoryResult = checkPermission(
