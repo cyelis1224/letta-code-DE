@@ -7,11 +7,9 @@ import type {
 } from "@letta-ai/letta-client/resources/agents/agents";
 import type { ApprovalCreate } from "@letta-ai/letta-client/resources/agents/messages";
 import type { StopReasonType } from "@letta-ai/letta-client/resources/runs/runs";
-import type {
-  ApprovalDecision,
-  ApprovalResult,
-} from "./agent/approval-execution";
+import type { ApprovalResult } from "./agent/approval-execution";
 import {
+  buildFreshDenialApprovals,
   extractConflictDetail,
   fetchRunErrorDetail,
   getPreStreamErrorAction,
@@ -20,6 +18,7 @@ import {
   isEmptyResponseRetryable,
   isInvalidToolCallIdsError,
   parseRetryAfterHeaderMs,
+  STALE_APPROVAL_RECOVERY_DENIAL_REASON,
   shouldRetryRunMetadataError,
 } from "./agent/approval-recovery";
 import { handleBootstrapSessionState } from "./agent/bootstrapHandler";
@@ -79,6 +78,7 @@ import {
 } from "./cli/startupFlagValidation";
 import { SYSTEM_REMINDER_CLOSE, SYSTEM_REMINDER_OPEN } from "./constants";
 import { computeDiffPreviews } from "./helpers/diffPreview";
+import { formatPermissionDenial } from "./permissions/formatDenial";
 import { QueueRuntime } from "./queue/queueRuntime";
 import {
   mergeQueuedTurnInput,
@@ -385,6 +385,27 @@ async function prepareHeadlessToolExecutionContext(params: {
       (tool) => tool.name,
     ),
   };
+}
+
+async function sendScopedApprovalMessages(params: {
+  agentId: string;
+  conversationId: string;
+  approvalMessages: Array<MessageCreate | ApprovalCreate>;
+}): Promise<Awaited<ReturnType<typeof sendMessageStream>>> {
+  const approvalToolContext = await prepareHeadlessToolExecutionContext({
+    agentId: params.agentId,
+    conversationId: params.conversationId,
+  });
+
+  return await sendMessageStream(
+    params.conversationId,
+    params.approvalMessages,
+    {
+      agentId: params.agentId,
+      preparedToolContext:
+        approvalToolContext.preparedToolContext.preparedToolContext,
+    },
+  );
 }
 
 async function flushAndExit(code: number): Promise<never> {
@@ -1444,9 +1465,12 @@ export async function handleHeadlessCommand(
 
   const reminderContextTracker = createContextTracker();
   const sharedReminderState = createSharedReminderState();
+  let queuedRecoveredApprovalResults: ApprovalResult[] | null = null;
 
   // Helper to resolve any pending approvals before sending user input
-  const resolveAllPendingApprovals = async () => {
+  const resolveAllPendingApprovals = async (
+    mode: "queue_for_next_turn" | "send_immediately" = "send_immediately",
+  ) => {
     const { getResumeData } = await import("./agent/check-approval");
     while (true) {
       // Re-fetch agent to get latest in-context messages (source of truth for backend)
@@ -1470,104 +1494,23 @@ export async function handleHeadlessCommand(
       const pendingApprovals = resume.pendingApprovals || [];
       if (pendingApprovals.length === 0) break;
 
-      // Phase 1: Collect decisions for all approvals
-      type Decision =
-        | {
-            type: "approve";
-            approval: {
-              toolCallId: string;
-              toolName: string;
-              toolArgs: string;
-            };
-            reason: string;
-            matchedRule: string;
-          }
-        | {
-            type: "deny";
-            approval: {
-              toolCallId: string;
-              toolName: string;
-              toolArgs: string;
-            };
-            reason: string;
-          };
-
-      const { autoAllowed, autoDenied } = await classifyApprovals(
+      const denialResults = buildFreshDenialApprovals(
         pendingApprovals,
-        {
-          alwaysRequiresUserInput: isInteractiveApprovalTool,
-          treatAskAsDeny: true,
-          denyReasonForAsk: "Tool requires approval (headless mode)",
-          requireArgsForAutoApprove: true,
-          missingNameReason: "Tool call incomplete - missing name",
-        },
-      );
-
-      const decisions: Decision[] = [
-        ...autoAllowed.map((ac) => ({
-          type: "approve" as const,
-          approval: ac.approval,
-          reason: ac.permission.reason || "Allowed by permission rule",
-          matchedRule:
-            "matchedRule" in ac.permission && ac.permission.matchedRule
-              ? ac.permission.matchedRule
-              : "auto-approved",
-        })),
-        ...autoDenied.map((ac) => {
-          const fallback =
-            "matchedRule" in ac.permission && ac.permission.matchedRule
-              ? `Permission denied: ${ac.permission.matchedRule}`
-              : ac.permission.reason
-                ? `Permission denied: ${ac.permission.reason}`
-                : "Permission denied: Unknown reason";
-          return {
-            type: "deny" as const,
-            approval: ac.approval,
-            reason: ac.denyReason ?? fallback,
-          };
-        }),
-      ];
-
-      // Phase 2: Execute approved tools and format results using shared function
-      const { executeApprovalBatch } = await import(
-        "./agent/approval-execution"
-      );
-
-      // Emit auto_approval events for stream-json format
-      if (outputFormat === "stream-json") {
-        for (const decision of decisions) {
-          if (decision.type === "approve") {
-            const autoApprovalMsg: AutoApprovalMessage = {
-              type: "auto_approval",
-              tool_call: {
-                name: decision.approval.toolName,
-                tool_call_id: decision.approval.toolCallId,
-                arguments: decision.approval.toolArgs,
-              },
-              reason: decision.reason,
-              matched_rule: decision.matchedRule,
-              session_id: sessionId,
-              uuid: `auto-approval-${decision.approval.toolCallId}`,
-            };
-            writeWireMessage(autoApprovalMsg);
-          }
-        }
+        STALE_APPROVAL_RECOVERY_DENIAL_REASON,
+      ) as ApprovalResult[];
+      if (denialResults.length === 0) {
+        break;
       }
 
-      const recoveryToolContext = await prepareHeadlessToolExecutionContext({
-        agentId: agent.id,
-        conversationId,
-      });
-      availableTools = recoveryToolContext.availableTools;
-      const executedResults = await executeApprovalBatch(decisions, undefined, {
-        toolContextId:
-          recoveryToolContext.preparedToolContext.preparedToolContext.contextId,
-      });
+      if (mode === "queue_for_next_turn") {
+        queuedRecoveredApprovalResults = denialResults;
+        break;
+      }
 
       // Send all results in one batch
       const approvalInput: ApprovalCreate = {
         type: "approval",
-        approvals: executedResults as ApprovalResult[],
+        approvals: denialResults,
         otid: randomUUID(),
       };
 
@@ -1594,15 +1537,11 @@ export async function handleHeadlessCommand(
       }
 
       // Send the approval to clear the pending state; drain the stream without output
-      const approvalStream = await sendMessageStream(
+      const approvalStream = await sendScopedApprovalMessages({
+        agentId: agent.id,
         conversationId,
         approvalMessages,
-        {
-          agentId: agent.id,
-          preparedToolContext:
-            recoveryToolContext.preparedToolContext.preparedToolContext,
-        },
-      );
+      });
       const drainResult = await drainStreamWithResume(
         approvalStream,
         createBuffers(agent.id),
@@ -1629,7 +1568,7 @@ export async function handleHeadlessCommand(
   // For new agents/conversations, lazy recovery handles any edge cases
   if (isResumingAgent) {
     try {
-      await resolveAllPendingApprovals();
+      await resolveAllPendingApprovals("queue_for_next_turn");
     } catch (approvalError) {
       // Don't crash on pre-loop approval resolution (e.g., 409 from server-side
       // sleeptime run holding the conversation lock). The main loop's own
@@ -1752,6 +1691,19 @@ ${SYSTEM_REMINDER_CLOSE}
       otid: randomUUID(),
     },
   ];
+  const recoveredApprovalResults: ApprovalResult[] =
+    queuedRecoveredApprovalResults ?? [];
+  if (recoveredApprovalResults.length > 0) {
+    currentInput = [
+      {
+        type: "approval",
+        approvals: recoveredApprovalResults,
+        otid: randomUUID(),
+      },
+      ...currentInput,
+    ];
+    queuedRecoveredApprovalResults = null;
+  }
   const refreshCurrentInputOtids = () => {
     // Terminal stop-reason retries are NEW requests and must not reuse OTIDs.
     currentInput = currentInput.map((item) => ({
@@ -2260,19 +2212,11 @@ ${SYSTEM_REMINDER_CLOSE}
               reason: "Tool requires approval (headless mode)",
             };
           }),
-          ...autoDenied.map((ac) => {
-            const fallback =
-              "matchedRule" in ac.permission && ac.permission.matchedRule
-                ? `Permission denied: ${ac.permission.matchedRule}`
-                : ac.permission.reason
-                  ? `Permission denied: ${ac.permission.reason}`
-                  : "Permission denied: Unknown reason";
-            return {
-              type: "deny" as const,
-              approval: ac.approval,
-              reason: ac.denyReason ?? fallback,
-            };
-          }),
+          ...autoDenied.map((ac) => ({
+            type: "deny" as const,
+            approval: ac.approval,
+            reason: formatPermissionDenial(ac.permission, ac.denyReason),
+          })),
         ];
 
         // Phase 2: Execute all approved tools and format results using shared function
@@ -2889,78 +2833,17 @@ async function runBidirectionalMode(
       const pendingApprovals = resume.pendingApprovals || [];
       if (pendingApprovals.length === 0) break;
 
-      type Decision =
-        | {
-            type: "approve";
-            approval: {
-              toolCallId: string;
-              toolName: string;
-              toolArgs: string;
-            };
-            reason: string;
-            matchedRule: string;
-          }
-        | {
-            type: "deny";
-            approval: {
-              toolCallId: string;
-              toolName: string;
-              toolArgs: string;
-            };
-            reason: string;
-          };
-
-      const { autoAllowed, autoDenied } = await classifyApprovals(
+      const denialResults = buildFreshDenialApprovals(
         pendingApprovals,
-        {
-          treatAskAsDeny: true,
-          denyReasonForAsk: "Tool requires approval (headless mode)",
-          requireArgsForAutoApprove: true,
-          missingNameReason: "Tool call incomplete - missing name",
-        },
-      );
-
-      const decisions: Decision[] = [
-        ...autoAllowed.map((ac) => ({
-          type: "approve" as const,
-          approval: ac.approval,
-          reason: ac.permission.reason || "Allowed by permission rule",
-          matchedRule:
-            "matchedRule" in ac.permission && ac.permission.matchedRule
-              ? ac.permission.matchedRule
-              : "auto-approved",
-        })),
-        ...autoDenied.map((ac) => {
-          const fallback =
-            "matchedRule" in ac.permission && ac.permission.matchedRule
-              ? `Permission denied: ${ac.permission.matchedRule}`
-              : ac.permission.reason
-                ? `Permission denied: ${ac.permission.reason}`
-                : "Permission denied: Unknown reason";
-          return {
-            type: "deny" as const,
-            approval: ac.approval,
-            reason: ac.denyReason ?? fallback,
-          };
-        }),
-      ];
-
-      const { executeApprovalBatch } = await import(
-        "./agent/approval-execution"
-      );
-      const recoveryToolContext = await prepareHeadlessToolExecutionContext({
-        agentId: agent.id,
-        conversationId,
-      });
-      availableTools = recoveryToolContext.availableTools;
-      const executedResults = await executeApprovalBatch(decisions, undefined, {
-        toolContextId:
-          recoveryToolContext.preparedToolContext.preparedToolContext.contextId,
-      });
+        STALE_APPROVAL_RECOVERY_DENIAL_REASON,
+      ) as ApprovalResult[];
+      if (denialResults.length === 0) {
+        break;
+      }
 
       const approvalInput: ApprovalCreate = {
         type: "approval",
-        approvals: executedResults as ApprovalResult[],
+        approvals: denialResults,
         otid: randomUUID(),
       };
 
@@ -2986,15 +2869,11 @@ async function runBidirectionalMode(
         }
       }
 
-      const approvalStream = await sendMessageStream(
+      const approvalStream = await sendScopedApprovalMessages({
+        agentId: agent.id,
         conversationId,
         approvalMessages,
-        {
-          agentId: agent.id,
-          preparedToolContext:
-            recoveryToolContext.preparedToolContext.preparedToolContext,
-        },
-      );
+      });
       const drainResult = await drainStreamWithResume(
         approvalStream,
         createBuffers(agent.id),
@@ -3312,7 +3191,6 @@ async function runBidirectionalMode(
     }
 
     const { getResumeData } = await import("./agent/check-approval");
-    const { executeApprovalBatch } = await import("./agent/approval-execution");
 
     let approvalsProcessed = 0;
     const MAX_RECOVERY_PASSES = 8;
@@ -3348,71 +3226,29 @@ async function runBidirectionalMode(
         };
       }
 
-      const { autoAllowed, autoDenied, needsUserInput } =
-        await classifyApprovals(pendingApprovals, {
-          alwaysRequiresUserInput: isInteractiveApprovalTool,
-          requireArgsForAutoApprove: true,
-          missingNameReason: "Tool call incomplete - missing name",
-        });
-
-      const decisions: ApprovalDecision[] = [
-        ...autoAllowed.map((ac) => ({
-          type: "approve" as const,
-          approval: ac.approval,
-        })),
-        ...autoDenied.map((ac) => ({
-          type: "deny" as const,
-          approval: ac.approval,
-          reason: ac.denyReason || ac.permission.reason || "Permission denied",
-        })),
-      ];
-
-      // In headless recovery mode, auto-deny approvals that would require user
-      // input. Calling requestPermission() here would block waiting for a
-      // response that will never come, causing a timeout.
-      for (const ac of needsUserInput) {
-        decisions.push({
-          type: "deny",
-          approval: ac.approval,
-          reason:
-            ac.denyReason ||
-            "Auto-denied during recovery - tool requires interactive approval",
-        });
-      }
-
-      if (decisions.length === 0) {
+      const denialResults = buildFreshDenialApprovals(
+        pendingApprovals,
+        STALE_APPROVAL_RECOVERY_DENIAL_REASON,
+      ) as ApprovalResult[];
+      if (denialResults.length === 0) {
         return {
           recovered: false,
           pending_approval: true,
           approvals_processed: approvalsProcessed,
         };
       }
-
-      const recoveryToolContext = await prepareHeadlessToolExecutionContext({
-        agentId: agent.id,
-        conversationId: targetConversationId,
-      });
-      availableTools = recoveryToolContext.availableTools;
-      const executedResults = await executeApprovalBatch(decisions, undefined, {
-        toolContextId:
-          recoveryToolContext.preparedToolContext.preparedToolContext.contextId,
-      });
-      approvalsProcessed += executedResults.length;
+      approvalsProcessed += denialResults.length;
 
       const approvalInput: ApprovalCreate = {
         type: "approval",
-        approvals: executedResults as ApprovalResult[],
+        approvals: denialResults,
         otid: randomUUID(),
       };
-      const approvalStream = await sendMessageStream(
-        targetConversationId,
-        [approvalInput],
-        {
-          agentId: agent.id,
-          preparedToolContext:
-            recoveryToolContext.preparedToolContext.preparedToolContext,
-        },
-      );
+      const approvalStream = await sendScopedApprovalMessages({
+        agentId: agent.id,
+        conversationId: targetConversationId,
+        approvalMessages: [approvalInput],
+      });
 
       const drainResult = await drainStreamWithResume(
         approvalStream,
@@ -4047,19 +3883,11 @@ async function runBidirectionalMode(
                     ? ac.permission.matchedRule
                     : "auto-approved",
               })),
-              ...autoDenied.map((ac) => {
-                const fallback =
-                  "matchedRule" in ac.permission && ac.permission.matchedRule
-                    ? `Permission denied: ${ac.permission.matchedRule}`
-                    : ac.permission.reason
-                      ? `Permission denied: ${ac.permission.reason}`
-                      : "Permission denied: Unknown reason";
-                return {
-                  type: "deny" as const,
-                  approval: ac.approval,
-                  reason: ac.denyReason ?? fallback,
-                };
-              }),
+              ...autoDenied.map((ac) => ({
+                type: "deny" as const,
+                approval: ac.approval,
+                reason: formatPermissionDenial(ac.permission, ac.denyReason),
+              })),
             ];
 
             for (const approvalItem of autoAllowed) {

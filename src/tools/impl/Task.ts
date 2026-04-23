@@ -23,6 +23,7 @@ import {
 } from "../../cli/helpers/subagentState.js";
 import { formatTaskNotification } from "../../cli/helpers/taskNotifications.js";
 import { runSubagentStopHooks } from "../../hooks";
+import { getCurrentWorkingDirectory } from "../../runtime-context";
 import {
   appendToOutputFile,
   assertBackgroundTaskCapacity,
@@ -369,6 +370,13 @@ export function spawnBackgroundSubagentTask(
   // Intentionally fire-and-forget: background tasks own their lifecycle and
   // capture failures in task state/transcripts instead of surfacing a promise
   // back to the caller.
+  //
+  // Capture parentAgentId synchronously here (not inside spawnSubagent, which
+  // runs after async yields and can see a drifted in-process context if the
+  // listener is processing another agent's turn). resolvedParentScope.agentId
+  // is the authoritative value — the listener and App.tsx both derive it
+  // from their own closure-captured agentId.
+  const parentAgentIdForSpawn = resolvedParentScope?.agentId;
   spawnSubagentFn(
     subagentType,
     prompt,
@@ -379,6 +387,7 @@ export function spawnBackgroundSubagentTask(
     existingConversationId,
     maxTurns,
     forkedContext,
+    parentAgentIdForSpawn,
   )
     .then(async (result) => {
       bgTask.status = result.success ? "completed" : "failed";
@@ -427,7 +436,7 @@ export function spawnBackgroundSubagentTask(
         const fullResult = result.success
           ? `${header}\n\n${result.report || ""}`
           : `${header}\n\nError: ${result.error || "Subagent execution failed"}`;
-        const userCwd = process.env.USER_CWD || process.cwd();
+        const userCwd = getCurrentWorkingDirectory();
         const { content: truncatedResult } = truncateByChars(
           fullResult,
           LIMITS.TASK_OUTPUT_CHARS,
@@ -722,6 +731,9 @@ export async function task(args: TaskArgs): Promise<string> {
   writeTaskTranscriptStart(outputFile, description, subagent_type);
 
   try {
+    // See spawnBackgroundSubagentTask for rationale: capture parentAgentId
+    // synchronously here to avoid the async-drift race inside spawnSubagent.
+    const parentAgentIdForSpawn = resolvedParentScope?.agentId;
     const result = await spawnSubagent(
       subagent_type,
       prompt,
@@ -732,6 +744,7 @@ export async function task(args: TaskArgs): Promise<string> {
       effectiveConversationId,
       args.max_turns,
       config.fork,
+      parentAgentIdForSpawn,
     );
 
     // Mark subagent as completed in state store
@@ -781,7 +794,7 @@ export async function task(args: TaskArgs): Promise<string> {
     const fullOutput = `${header}\n\n${result.report}`;
     writeTaskTranscriptResult(outputFile, result, header);
 
-    const userCwd = process.env.USER_CWD || process.cwd();
+    const userCwd = getCurrentWorkingDirectory();
 
     // Apply truncation to prevent excessive token usage (same pattern as Bash tool)
     const { content: truncatedOutput } = truncateByChars(
