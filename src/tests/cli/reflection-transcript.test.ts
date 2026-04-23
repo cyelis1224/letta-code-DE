@@ -64,6 +64,8 @@ describe("reflectionTranscript helper", () => {
     expect(payload.startMessageId).toBe("u1");
     expect(payload.endMessageId).toBe("a1");
 
+    expect(payload.payloadPath.endsWith(".json")).toBe(true);
+
     const payloadText = await readFile(payload.payloadPath, "utf-8");
     const messages = JSON.parse(payloadText);
     expect(messages).toBeArray();
@@ -291,7 +293,7 @@ describe("reflectionTranscript helper", () => {
 
   test("buildReflectionSubagentPrompt uses expanded reflection instructions", () => {
     const prompt = buildReflectionSubagentPrompt({
-      transcriptPath: "/tmp/transcript.txt",
+      transcriptPath: "/tmp/transcript.json",
       memoryDir: "/tmp/memory",
       cwd: "/tmp/work",
       parentMemory: "<parent_memory>snapshot</parent_memory>",

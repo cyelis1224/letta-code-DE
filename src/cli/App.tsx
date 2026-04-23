@@ -96,6 +96,7 @@ import {
   runUserPromptSubmitHooks,
 } from "../hooks";
 import type { ApprovalContext } from "../permissions/analyzer";
+import { formatPermissionDenial } from "../permissions/formatDenial";
 import { type PermissionMode, permissionMode } from "../permissions/mode";
 import { OPENAI_CODEX_PROVIDER_NAME } from "../providers/openai-codex-provider";
 import {
@@ -285,6 +286,7 @@ import {
   toQueuedMsg,
 } from "./helpers/queuedMessageParts";
 import { resolveReasoningTabToggleCommand } from "./helpers/reasoningTabToggle";
+import { isReflectionSubagentActive } from "./helpers/reflectionGate";
 import {
   appendTranscriptDeltaJsonl,
   buildAutoReflectionPayload,
@@ -319,6 +321,7 @@ import {
   getActiveBackgroundAgents,
   getSubagentByToolCallId,
   getSnapshot as getSubagentSnapshot,
+  getSubagents,
   hasActiveSubagents,
   interruptActiveSubagents,
   subscribe as subscribeToSubagents,
@@ -1073,13 +1076,11 @@ function formatReflectionSettings(settings: ReflectionSettings): string {
 
 const AUTO_REFLECTION_DESCRIPTION = "Reflect on recent conversations";
 
-function hasActiveReflectionSubagent(): boolean {
-  const snapshot = getSubagentSnapshot();
-  return snapshot.agents.some(
-    (agent) =>
-      agent.type.toLowerCase() === "reflection" &&
-      (agent.status === "pending" || agent.status === "running"),
-  );
+function hasActiveReflectionSubagent(
+  agentId: string,
+  conversationId: string,
+): boolean {
+  return isReflectionSubagentActive(getSubagents(), agentId, conversationId);
 }
 
 function buildTextParts(
@@ -5495,13 +5496,7 @@ export default function App({
 
               // Create denial results for auto-denied tools and update buffers
               autoDeniedResults = autoDenied.map((ac) => {
-                // Prefer the detailed reason over the short matchedRule name
-                // (e.g., reason contains plan file path info, matchedRule is just "plan mode")
-                const reason = ac.permission.reason
-                  ? `Permission denied: ${ac.permission.reason}`
-                  : "matchedRule" in ac.permission && ac.permission.matchedRule
-                    ? `Permission denied by rule: ${ac.permission.matchedRule}`
-                    : "Permission denied: Unknown reason";
+                const reason = formatPermissionDenial(ac.permission);
 
                 // Update buffers with tool rejection for UI
                 onChunk(buffersRef.current, {
@@ -10358,7 +10353,8 @@ export default function App({
             return { submitted: true };
           }
 
-          if (hasActiveReflectionSubagent()) {
+          const reflectConversationId = conversationIdRef.current ?? "default";
+          if (hasActiveReflectionSubagent(agentId, reflectConversationId)) {
             cmd.fail(
               "A reflection agent is already running in the background.",
             );
@@ -10408,6 +10404,10 @@ export default function App({
               prompt: reflectionPrompt,
               description: "Reflecting on conversation",
               silentCompletion: true,
+              parentScope: {
+                agentId,
+                conversationId: reflectionConversationId,
+              },
               onComplete: async ({
                 success,
                 error,
@@ -10851,7 +10851,9 @@ ${SYSTEM_REMINDER_CLOSE}
         if (!memfsEnabledForAgent) {
           return false;
         }
-        if (hasActiveReflectionSubagent()) {
+        const autoReflectConversationId =
+          conversationIdRef.current ?? "default";
+        if (hasActiveReflectionSubagent(agentId, autoReflectConversationId)) {
           debugLog(
             "memory",
             `Skipping auto reflection launch (${triggerSource}) because one is already active`,
@@ -10903,6 +10905,10 @@ ${SYSTEM_REMINDER_CLOSE}
             prompt: reflectionPrompt,
             description: AUTO_REFLECTION_DESCRIPTION,
             silentCompletion: true,
+            parentScope: {
+              agentId,
+              conversationId: reflectionConversationId,
+            },
             onComplete: async ({
               success,
               error,

@@ -553,7 +553,7 @@ async function readTranscriptLines(
 
 function buildPayloadPath(kind: "auto" | "remember"): string {
   const nonce = Math.random().toString(36).slice(2, 8);
-  return join(tmpdir(), `letta-${kind}-${nonce}.txt`);
+  return join(tmpdir(), `letta-${kind}-${nonce}.json`);
 }
 
 export function getReflectionTranscriptPaths(
