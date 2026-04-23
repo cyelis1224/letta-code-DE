@@ -190,6 +190,7 @@ export const ANTHROPIC_DEFAULT_TOOLS: ToolName[] = [
   "Read",
   "Skill",
   "Task",
+  "TodoWrite",
   "Write",
 ];
 
