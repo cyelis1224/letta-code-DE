@@ -1673,6 +1673,21 @@ async function handleChannelsProtocolCommand(
         has_token: snapshot.hasToken,
       };
     }
+    if (snapshot.channelId === "bluesky") {
+      return {
+        channel_id: snapshot.channelId,
+        account_id: snapshot.accountId,
+        display_name: snapshot.displayName,
+        enabled: snapshot.enabled,
+        dm_policy: snapshot.dmPolicy,
+        allowed_users: snapshot.allowedUsers,
+        handle: snapshot.handle,
+        has_app_password: snapshot.hasAppPassword,
+        service_url: snapshot.serviceUrl,
+        app_view_url: snapshot.appViewUrl,
+        interval_sec: snapshot.intervalSec,
+      };
+    }
     return {
       channel_id: snapshot.channelId,
       account_id: snapshot.accountId,
@@ -1720,6 +1735,27 @@ async function handleChannelsProtocolCommand(
         dm_policy: snapshot.dmPolicy,
         allowed_users: snapshot.allowedUsers,
         has_token: snapshot.hasToken,
+        agent_id: snapshot.agentId,
+        created_at: snapshot.createdAt,
+        updated_at: snapshot.updatedAt,
+      };
+    }
+
+    if (snapshot.channelId === "bluesky") {
+      return {
+        channel_id: snapshot.channelId,
+        account_id: snapshot.accountId,
+        display_name: snapshot.displayName,
+        enabled: snapshot.enabled,
+        configured: snapshot.configured,
+        running: snapshot.running,
+        dm_policy: snapshot.dmPolicy,
+        allowed_users: snapshot.allowedUsers,
+        handle: snapshot.handle,
+        has_app_password: snapshot.hasAppPassword,
+        service_url: snapshot.serviceUrl,
+        app_view_url: snapshot.appViewUrl,
+        interval_sec: snapshot.intervalSec,
         agent_id: snapshot.agentId,
         created_at: snapshot.createdAt,
         updated_at: snapshot.updatedAt,

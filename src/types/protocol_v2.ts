@@ -141,7 +141,7 @@ export interface ReflectionSettingsSnapshot {
   step_count: number;
 }
 
-export type ChannelId = "telegram" | "slack" | "discord";
+export type ChannelId = "telegram" | "slack" | "discord" | "bluesky";
 
 export interface ChannelSummary {
   channel_id: ChannelId;
@@ -184,6 +184,19 @@ export type ChannelConfigSnapshot =
       dm_policy: DmPolicy;
       allowed_users: string[];
       has_token: boolean;
+    }
+  | {
+      channel_id: "bluesky";
+      account_id: string;
+      display_name?: string;
+      enabled: boolean;
+      dm_policy: DmPolicy;
+      allowed_users: string[];
+      handle: string;
+      has_app_password: boolean;
+      service_url?: string;
+      app_view_url?: string;
+      interval_sec?: number;
     };
 
 export type ChannelAccountSnapshot =
@@ -231,6 +244,24 @@ export type ChannelAccountSnapshot =
       dm_policy: DmPolicy;
       allowed_users: string[];
       has_token: boolean;
+      agent_id: string | null;
+      created_at: string;
+      updated_at: string;
+    }
+  | {
+      channel_id: "bluesky";
+      account_id: string;
+      display_name?: string;
+      enabled: boolean;
+      configured: boolean;
+      running: boolean;
+      dm_policy: DmPolicy;
+      allowed_users: string[];
+      handle: string;
+      has_app_password: boolean;
+      service_url?: string;
+      app_view_url?: string;
+      interval_sec?: number;
       agent_id: string | null;
       created_at: string;
       updated_at: string;

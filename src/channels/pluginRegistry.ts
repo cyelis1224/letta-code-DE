@@ -47,6 +47,19 @@ const CHANNEL_PLUGIN_REGISTRATIONS: Record<
       return discordChannelPlugin;
     },
   },
+  bluesky: {
+    metadata: {
+      id: "bluesky",
+      displayName: "Bluesky",
+      // V1 speaks XRPC via built-in fetch; no external runtime modules.
+      runtimePackages: [],
+      runtimeModules: [],
+    },
+    load: async () => {
+      const { blueskyChannelPlugin } = await import("./bluesky/plugin");
+      return blueskyChannelPlugin;
+    },
+  },
 };
 
 export function isSupportedChannelId(

@@ -7,7 +7,12 @@
  * platform chat IDs to agent+conversation pairs.
  */
 
-export const SUPPORTED_CHANNEL_IDS = ["telegram", "slack", "discord"] as const;
+export const SUPPORTED_CHANNEL_IDS = [
+  "telegram",
+  "slack",
+  "discord",
+  "bluesky",
+] as const;
 export type SupportedChannelId = (typeof SUPPORTED_CHANNEL_IDS)[number];
 export type ChannelChatType = "direct" | "channel";
 export type SlackDefaultPermissionMode =
@@ -294,10 +299,56 @@ export interface DiscordChannelConfig {
   allowedUsers: string[];
 }
 
+/**
+ * Bluesky notifications-channel config.
+ *
+ * V1 is receive-only: we poll `app.bsky.notification.listNotifications`,
+ * hydrate thread context, download attachments, and emit each notification
+ * as an InboundChannelMessage. Outbound `sendMessage` posts a plain-text
+ * reply to the triggering thread; anything richer (facets, images, threads,
+ * quote posts, likes, follows, blocks) goes through `social-cli`.
+ *
+ * Authenticated with an app password — generate one at bsky.app under
+ * Settings > App Passwords. Store the app password, not the account password.
+ */
+export interface BlueskyChannelConfig {
+  channel: "bluesky";
+  enabled: boolean;
+  /** Handle including the domain, e.g. "loop.bsky.social". */
+  handle: string;
+  /** App password (not the main account password). */
+  appPassword: string;
+  /** PDS to create the session against. Defaults to https://bsky.social. */
+  serviceUrl?: string;
+  /** AppView for notifications / getPostThread. Defaults to https://public.api.bsky.app. */
+  appViewUrl?: string;
+  /** Polling interval (seconds). Defaults to 60. */
+  intervalSec?: number;
+  /** Notification reasons to deliver. Defaults to ["mention","reply","quote"]. */
+  reasons?: BlueskyNotificationReason[];
+  /** When true, deliver unseen notifications from before the first poll. */
+  backfill?: boolean;
+  /** Parent-post depth for thread-context hydration. Defaults to 5. */
+  threadContextDepth?: number;
+  dmPolicy: DmPolicy;
+  /** Allowlisted author DIDs when dmPolicy === "allowlist". */
+  allowedUsers: string[];
+}
+
+export type BlueskyNotificationReason =
+  | "mention"
+  | "reply"
+  | "quote"
+  | "like"
+  | "repost"
+  | "follow"
+  | "starterpack-joined";
+
 export type ChannelConfig =
   | TelegramChannelConfig
   | SlackChannelConfig
-  | DiscordChannelConfig;
+  | DiscordChannelConfig
+  | BlueskyChannelConfig;
 
 export interface TelegramChannelAccount extends ChannelAccountBase {
   channel: "telegram";
@@ -323,10 +374,25 @@ export interface DiscordChannelAccount extends ChannelAccountBase {
   agentId: string | null;
 }
 
+export interface BlueskyChannelAccount extends ChannelAccountBase {
+  channel: "bluesky";
+  handle: string;
+  appPassword: string;
+  serviceUrl?: string;
+  appViewUrl?: string;
+  intervalSec?: number;
+  reasons?: BlueskyNotificationReason[];
+  backfill?: boolean;
+  threadContextDepth?: number;
+  /** Agent this Bluesky identity is bound to for auto-routing. */
+  agentId: string | null;
+}
+
 export type ChannelAccount =
   | TelegramChannelAccount
   | SlackChannelAccount
-  | DiscordChannelAccount;
+  | DiscordChannelAccount
+  | BlueskyChannelAccount;
 
 // ── Pairing ───────────────────────────────────────────────────────
 

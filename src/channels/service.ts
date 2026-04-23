@@ -95,6 +95,19 @@ export type ChannelConfigSnapshot =
       dmPolicy: DmPolicy;
       allowedUsers: string[];
       hasToken: boolean;
+    }
+  | {
+      channelId: "bluesky";
+      accountId: string;
+      displayName?: string;
+      enabled: boolean;
+      dmPolicy: DmPolicy;
+      allowedUsers: string[];
+      handle: string;
+      hasAppPassword: boolean;
+      serviceUrl?: string;
+      appViewUrl?: string;
+      intervalSec?: number;
     };
 
 export interface PendingPairingSnapshot {
@@ -185,6 +198,24 @@ export type ChannelAccountSnapshot =
       agentId: string | null;
       createdAt: string;
       updatedAt: string;
+    }
+  | {
+      channelId: "bluesky";
+      accountId: string;
+      displayName?: string;
+      enabled: boolean;
+      configured: boolean;
+      running: boolean;
+      dmPolicy: DmPolicy;
+      allowedUsers: string[];
+      handle: string;
+      hasAppPassword: boolean;
+      serviceUrl?: string;
+      appViewUrl?: string;
+      intervalSec?: number;
+      agentId: string | null;
+      createdAt: string;
+      updatedAt: string;
     };
 
 export interface ChannelConfigPatch {
@@ -260,6 +291,11 @@ async function resolveChannelAccountDisplayName(
       return normalizeDisplayName(
         await resolveDiscordAccountDisplayName(account.token),
       );
+    }
+
+    if (account.channel === "bluesky") {
+      const handle = account.handle.trim();
+      return handle ? normalizeDisplayName(`@${handle}`) : undefined;
     }
 
     if (!account.botToken.trim() || !account.appToken.trim()) {
@@ -403,6 +439,12 @@ function isAccountConfigured(account: ChannelAccount): boolean {
     return account.token.trim().length > 0;
   }
 
+  if (account.channel === "bluesky") {
+    return (
+      account.handle.trim().length > 0 && account.appPassword.trim().length > 0
+    );
+  }
+
   return (
     account.botToken.trim().length > 0 && account.appToken.trim().length > 0
   );
@@ -458,6 +500,27 @@ function toAccountSnapshot(account: ChannelAccount): ChannelAccountSnapshot {
       dmPolicy: account.dmPolicy,
       allowedUsers: [...account.allowedUsers],
       hasToken: account.token.trim().length > 0,
+      agentId: account.agentId,
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+    };
+  }
+
+  if (account.channel === "bluesky") {
+    return {
+      channelId: "bluesky",
+      accountId: account.accountId,
+      displayName: account.displayName,
+      enabled: account.enabled,
+      configured: isAccountConfigured(account),
+      running,
+      dmPolicy: account.dmPolicy,
+      allowedUsers: [...account.allowedUsers],
+      handle: account.handle,
+      hasAppPassword: account.appPassword.trim().length > 0,
+      serviceUrl: account.serviceUrl,
+      appViewUrl: account.appViewUrl,
+      intervalSec: account.intervalSec,
       agentId: account.agentId,
       createdAt: account.createdAt,
       updatedAt: account.updatedAt,
@@ -578,6 +641,21 @@ function mergeAccountPatch(
     };
   }
 
+  if (existing.channel === "bluesky") {
+    return {
+      ...existing,
+      displayName:
+        patch.displayName !== undefined
+          ? normalizeDisplayName(patch.displayName)
+          : existing.displayName,
+      enabled: patch.enabled ?? existing.enabled,
+      agentId: patch.agentId ?? existing.agentId,
+      dmPolicy: patch.dmPolicy ?? existing.dmPolicy,
+      allowedUsers: patch.allowedUsers ?? existing.allowedUsers,
+      updatedAt: nextUpdatedAt,
+    };
+  }
+
   return {
     ...existing,
     displayName:
@@ -671,6 +749,22 @@ export function getChannelConfigSnapshot(
       dmPolicy: account.dmPolicy,
       allowedUsers: [...account.allowedUsers],
       hasToken: account.token.trim().length > 0,
+    };
+  }
+
+  if (account.channel === "bluesky") {
+    return {
+      channelId: "bluesky",
+      accountId: account.accountId,
+      displayName: account.displayName,
+      enabled: account.enabled,
+      dmPolicy: account.dmPolicy,
+      allowedUsers: [...account.allowedUsers],
+      handle: account.handle,
+      hasAppPassword: account.appPassword.trim().length > 0,
+      serviceUrl: account.serviceUrl,
+      appViewUrl: account.appViewUrl,
+      intervalSec: account.intervalSec,
     };
   }
 

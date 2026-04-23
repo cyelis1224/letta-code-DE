@@ -43,6 +43,7 @@ import {
 } from "../../channels/runtimeDeps";
 import { listChannelAccountSnapshots } from "../../channels/service";
 import type {
+  BlueskyChannelAccount,
   ChannelRoute,
   SlackChannelAccount,
   SupportedChannelId,
@@ -501,9 +502,13 @@ function handleBind(
     console.error("Error: --channel is required.");
     return 1;
   }
-  if (channelId !== "slack" && channelId !== "discord") {
+  if (
+    channelId !== "slack" &&
+    channelId !== "discord" &&
+    channelId !== "bluesky"
+  ) {
     console.error(
-      `"bind" is only supported for Slack and Discord. Telegram binding is route-scoped — use "pair" or "route add" instead.`,
+      `"bind" is only supported for Slack, Discord, and Bluesky. Telegram binding is route-scoped — use "pair" or "route add" instead.`,
     );
     return 1;
   }
@@ -530,7 +535,13 @@ function handleBind(
     return 1;
   }
 
-  (account as SlackChannelAccount).agentId = agentId;
+  if (account.channel === "slack") {
+    (account as SlackChannelAccount).agentId = agentId;
+  } else if (account.channel === "discord") {
+    account.agentId = agentId;
+  } else if (account.channel === "bluesky") {
+    (account as BlueskyChannelAccount).agentId = agentId;
+  }
   account.updatedAt = new Date().toISOString();
   upsertChannelAccount(channelId, account);
 
