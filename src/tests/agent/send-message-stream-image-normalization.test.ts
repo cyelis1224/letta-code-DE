@@ -15,6 +15,7 @@ import {
   buildMessageContentFromDisplay,
   clearPlaceholdersInText,
 } from "../../cli/helpers/pasteRegistry";
+import { runWithRuntimeContext } from "../../runtime-context";
 
 const TEST_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=";
@@ -47,26 +48,6 @@ mock.module("../../agent/client", () => ({
   getServerUrl: () => "http://localhost:8283",
   consumeLastSDKDiagnostic: () => null,
   clearLastSDKDiagnostic: () => {},
-}));
-
-mock.module("../../agent/clientSkills", () => ({
-  buildClientSkillsPayload: async () => ({
-    clientSkills: [],
-    errors: [],
-  }),
-}));
-
-mock.module("../../tools/manager", () => ({
-  waitForToolsetReady: async () => {},
-  prepareCurrentToolExecutionContext: async () => {
-    throw new Error(
-      "prepareCurrentToolExecutionContext should not run in this test",
-    );
-  },
-}));
-
-mock.module("../../agent/context", () => ({
-  getSkillSources: () => [],
 }));
 
 const { sendMessageStream } = await import("../../agent/message");
@@ -104,13 +85,15 @@ describe("sendMessageStream image normalization", () => {
 
     const content = buildMessageContentFromDisplay(displayText);
 
-    await sendMessageStream("conv-test", [{ role: "user", content }], {
-      preparedToolContext: {
-        contextId: "ctx-test",
-        clientTools: [],
-        loadedToolNames: [],
-      },
-    });
+    await runWithRuntimeContext({ skillSources: [] }, () =>
+      sendMessageStream("conv-test", [{ role: "user", content }], {
+        preparedToolContext: {
+          contextId: "ctx-test",
+          clientTools: [],
+          loadedToolNames: [],
+        },
+      }),
+    );
 
     expect(createMessage).toHaveBeenCalledTimes(1);
     expect(capturedRequestBody).not.toBeNull();
@@ -135,30 +118,32 @@ describe("sendMessageStream image normalization", () => {
   });
 
   test("normalizes direct shared-send image payloads before the API request", async () => {
-    await sendMessageStream(
-      "conv-test",
-      [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: "image/heic",
-                data: TEST_PNG_BASE64,
+    await runWithRuntimeContext({ skillSources: [] }, () =>
+      sendMessageStream(
+        "conv-test",
+        [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/heic",
+                  data: TEST_PNG_BASE64,
+                },
               },
-            },
-          ],
+            ],
+          },
+        ],
+        {
+          preparedToolContext: {
+            contextId: "ctx-test-direct",
+            clientTools: [],
+            loadedToolNames: [],
+          },
         },
-      ],
-      {
-        preparedToolContext: {
-          contextId: "ctx-test-direct",
-          clientTools: [],
-          loadedToolNames: [],
-        },
-      },
+      ),
     );
 
     expect(createMessage).toHaveBeenCalledTimes(1);
@@ -179,30 +164,34 @@ describe("sendMessageStream image normalization", () => {
 
   test("fails closed before the API request when base64 image bytes are invalid", async () => {
     await expect(
-      sendMessageStream(
-        "conv-test",
-        [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: "image/tiff",
-                  data: Buffer.from("not-an-image", "utf8").toString("base64"),
+      runWithRuntimeContext({ skillSources: [] }, () =>
+        sendMessageStream(
+          "conv-test",
+          [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/tiff",
+                    data: Buffer.from("not-an-image", "utf8").toString(
+                      "base64",
+                    ),
+                  },
                 },
-              },
-            ],
+              ],
+            },
+          ],
+          {
+            preparedToolContext: {
+              contextId: "ctx-test-invalid",
+              clientTools: [],
+              loadedToolNames: [],
+            },
           },
-        ],
-        {
-          preparedToolContext: {
-            contextId: "ctx-test-invalid",
-            clientTools: [],
-            loadedToolNames: [],
-          },
-        },
+        ),
       ),
     ).rejects.toThrow();
 
