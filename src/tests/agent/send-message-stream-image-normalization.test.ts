@@ -1,22 +1,17 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { __testOverrideGetClient } from "../../agent/client";
+import type { MessageCreate } from "@letta-ai/letta-client/resources/agents/agents";
 import { translatePasteForImages } from "../../cli/helpers/clipboard";
 import {
   buildMessageContentFromDisplay,
   clearPlaceholdersInText,
 } from "../../cli/helpers/pasteRegistry";
-import { runWithRuntimeContext } from "../../runtime-context";
+import {
+  assertSupportedBase64ImageMediaTypes,
+  normalizeMessageImageParts,
+} from "../../utils/messageImageNormalization";
 
 const TEST_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=";
@@ -27,33 +22,31 @@ const ALLOWED_ANTHROPIC_MEDIA_TYPES = new Set([
   "image/webp",
 ]);
 
-let capturedRequestBody: Record<string, unknown> | null = null;
+function getFirstImageMediaType(message: MessageCreate): string | null {
+  if (typeof message.content === "string") {
+    return null;
+  }
 
-const createMessage = mock(async (_conversationId: string, body: unknown) => {
-  capturedRequestBody = body as Record<string, unknown>;
-  return {
-    [Symbol.asyncIterator]: async function* () {
-      // No-op stream for request-boundary assertions.
-    },
-  } as AsyncIterable<unknown>;
-});
+  const imagePart = message.content.find(
+    (
+      part,
+    ): part is {
+      type: "image";
+      source: { type: "base64"; media_type: string; data: string };
+    } =>
+      part.type === "image" &&
+      part.source.type === "base64" &&
+      typeof part.source.media_type === "string",
+  );
 
-const { sendMessageStream } = await import("../../agent/message");
+  return imagePart?.source.media_type ?? null;
+}
 
-describe("sendMessageStream image normalization", () => {
+describe("outbound image normalization", () => {
   let tempRoot = "";
   let displayText = "";
 
   beforeEach(() => {
-    capturedRequestBody = null;
-    createMessage.mockClear();
-    __testOverrideGetClient(async () => ({
-      conversations: {
-        messages: {
-          create: createMessage,
-        },
-      },
-    }));
     tempRoot = mkdtempSync(join(tmpdir(), "letta-image-send-"));
     displayText = "";
   });
@@ -65,11 +58,6 @@ describe("sendMessageStream image normalization", () => {
     if (tempRoot) {
       rmSync(tempRoot, { recursive: true, force: true });
     }
-    __testOverrideGetClient(null);
-  });
-
-  afterAll(() => {
-    mock.restore();
   });
 
   test("normalizes TUI file-path pasted images to Anthropic-supported media types before sending", async () => {
@@ -79,118 +67,88 @@ describe("sendMessageStream image normalization", () => {
     displayText = translatePasteForImages(imagePath);
     expect(displayText).toMatch(/^\[Image #\d+\]$/);
 
-    const content = buildMessageContentFromDisplay(displayText);
+    const rawMessages: MessageCreate[] = [
+      {
+        role: "user",
+        content: buildMessageContentFromDisplay(displayText),
+      },
+    ];
+    const rawMessage = rawMessages[0];
+    if (!rawMessage) {
+      throw new Error("Expected raw TUI message");
+    }
 
-    await runWithRuntimeContext({ skillSources: [] }, () =>
-      sendMessageStream("conv-test", [{ role: "user", content }], {
-        preparedToolContext: {
-          contextId: "ctx-test",
-          clientTools: [],
-          loadedToolNames: [],
-        },
-      }),
+    expect(getFirstImageMediaType(rawMessage)).toBe("image/tiff");
+    expect(() => assertSupportedBase64ImageMediaTypes(rawMessages)).toThrow(
+      /Unsupported base64 image media type/,
     );
 
-    expect(createMessage).toHaveBeenCalledTimes(1);
-    expect(capturedRequestBody).not.toBeNull();
+    const normalizedMessages = await normalizeMessageImageParts(rawMessages);
+    const normalizedMessage = normalizedMessages[0];
+    if (!normalizedMessage) {
+      throw new Error("Expected normalized TUI message");
+    }
 
-    const requestMessages = (capturedRequestBody as { messages?: unknown[] })
-      .messages;
-    expect(Array.isArray(requestMessages)).toBe(true);
-    const firstMessage = requestMessages?.[0] as {
-      content?: Array<{
-        type: string;
-        source?: { type: string; media_type: string; data: string };
-      }>;
-    };
-    const imagePart = firstMessage.content?.find(
-      (part) => part.type === "image",
-    );
-
-    expect(imagePart?.source?.type).toBe("base64");
+    expect(() =>
+      assertSupportedBase64ImageMediaTypes(normalizedMessages),
+    ).not.toThrow();
     expect(
-      ALLOWED_ANTHROPIC_MEDIA_TYPES.has(imagePart?.source?.media_type ?? ""),
+      ALLOWED_ANTHROPIC_MEDIA_TYPES.has(
+        getFirstImageMediaType(normalizedMessage) ?? "",
+      ),
     ).toBe(true);
   });
 
   test("normalizes direct shared-send image payloads before the API request", async () => {
-    await runWithRuntimeContext({ skillSources: [] }, () =>
-      sendMessageStream(
-        "conv-test",
-        [
+    const rawMessages: MessageCreate[] = [
+      {
+        role: "user",
+        content: [
           {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: "image/heic",
-                  data: TEST_PNG_BASE64,
-                },
-              },
-            ],
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/heic",
+              data: TEST_PNG_BASE64,
+            },
           },
         ],
-        {
-          preparedToolContext: {
-            contextId: "ctx-test-direct",
-            clientTools: [],
-            loadedToolNames: [],
-          },
-        },
-      ),
+      },
+    ];
+
+    expect(() => assertSupportedBase64ImageMediaTypes(rawMessages)).toThrow(
+      /Unsupported base64 image media type/,
     );
 
-    expect(createMessage).toHaveBeenCalledTimes(1);
-    const requestMessages = (capturedRequestBody as { messages?: unknown[] })
-      .messages;
-    const firstMessage = requestMessages?.[0] as {
-      content?: Array<{
-        type: string;
-        source?: { type: string; media_type: string; data: string };
-      }>;
-    };
-    const imagePart = firstMessage.content?.find(
-      (part) => part.type === "image",
-    );
+    const normalizedMessages = await normalizeMessageImageParts(rawMessages);
+    const normalizedMessage = normalizedMessages[0];
+    if (!normalizedMessage) {
+      throw new Error("Expected normalized direct-send message");
+    }
 
-    expect(imagePart?.source?.media_type).toBe("image/png");
+    expect(() =>
+      assertSupportedBase64ImageMediaTypes(normalizedMessages),
+    ).not.toThrow();
+    expect(getFirstImageMediaType(normalizedMessage)).toBe("image/png");
   });
 
   test("fails closed before the API request when base64 image bytes are invalid", async () => {
-    await expect(
-      runWithRuntimeContext({ skillSources: [] }, () =>
-        sendMessageStream(
-          "conv-test",
-          [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: "image/tiff",
-                    data: Buffer.from("not-an-image", "utf8").toString(
-                      "base64",
-                    ),
-                  },
-                },
-              ],
-            },
-          ],
+    const rawMessages: MessageCreate[] = [
+      {
+        role: "user",
+        content: [
           {
-            preparedToolContext: {
-              contextId: "ctx-test-invalid",
-              clientTools: [],
-              loadedToolNames: [],
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/tiff",
+              data: Buffer.from("not-an-image", "utf8").toString("base64"),
             },
           },
-        ),
-      ),
-    ).rejects.toThrow();
+        ],
+      },
+    ];
 
-    expect(createMessage).not.toHaveBeenCalled();
+    await expect(normalizeMessageImageParts(rawMessages)).rejects.toThrow();
   });
 });
