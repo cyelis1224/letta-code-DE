@@ -874,7 +874,11 @@ export function isChannelAccountCreateCommand(
   }
 
   if (c.channel_id === "telegram") {
-    return account.token === undefined || typeof account.token === "string";
+    return (
+      (account.token === undefined || typeof account.token === "string") &&
+      (account.transcribe_voice === undefined ||
+        typeof account.transcribe_voice === "boolean")
+    );
   }
 
   if (c.channel_id === "discord") {
@@ -926,7 +930,11 @@ export function isChannelAccountUpdateCommand(
   }
 
   if (c.channel_id === "telegram") {
-    return patch.token === undefined || typeof patch.token === "string";
+    return (
+      (patch.token === undefined || typeof patch.token === "string") &&
+      (patch.transcribe_voice === undefined ||
+        typeof patch.transcribe_voice === "boolean")
+    );
   }
 
   if (c.channel_id === "discord") {

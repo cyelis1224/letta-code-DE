@@ -1700,6 +1700,7 @@ async function handleChannelsProtocolCommand(
         dm_policy: snapshot.dmPolicy,
         allowed_users: snapshot.allowedUsers,
         has_token: snapshot.hasToken,
+        transcribe_voice: snapshot.transcribeVoice,
         binding: {
           agent_id: snapshot.binding.agentId,
           conversation_id: snapshot.binding.conversationId,
@@ -1904,6 +1905,10 @@ async function handleChannelsProtocolCommand(
             "default_permission_mode" in parsed.account
               ? parsed.account.default_permission_mode
               : undefined,
+          transcribeVoice:
+            "transcribe_voice" in parsed.account
+              ? parsed.account.transcribe_voice
+              : undefined,
           dmPolicy: parsed.account.dm_policy,
           allowedUsers: parsed.account.allowed_users,
         },
@@ -1983,6 +1988,10 @@ async function handleChannelsProtocolCommand(
           defaultPermissionMode:
             "default_permission_mode" in parsed.patch
               ? parsed.patch.default_permission_mode
+              : undefined,
+          transcribeVoice:
+            "transcribe_voice" in parsed.patch
+              ? parsed.patch.transcribe_voice
               : undefined,
           dmPolicy: parsed.patch.dm_policy,
           allowedUsers: parsed.patch.allowed_users,

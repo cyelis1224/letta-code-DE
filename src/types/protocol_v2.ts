@@ -197,6 +197,7 @@ export type ChannelAccountSnapshot =
       dm_policy: DmPolicy;
       allowed_users: string[];
       has_token: boolean;
+      transcribe_voice: boolean;
       binding: {
         agent_id: string | null;
         conversation_id: string | null;
@@ -1002,6 +1003,7 @@ export type ChannelAccountCreatePayload =
       token?: string;
       dm_policy?: DmPolicy;
       allowed_users?: string[];
+      transcribe_voice?: boolean;
     }
   | {
       account_id?: string;
@@ -1035,6 +1037,7 @@ export interface ChannelAccountUpdateCommand {
         token?: string;
         dm_policy?: DmPolicy;
         allowed_users?: string[];
+        transcribe_voice?: boolean;
       }
     | {
         display_name?: string;
