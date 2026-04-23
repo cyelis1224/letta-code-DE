@@ -1,7 +1,7 @@
 ---
 name: explore
 description: Fast agent for codebase exploration - finding files, searching code, understanding structure. (Read-Only)
-tools: Glob, Grep, Read, TaskOutput
+tools: Bash, Read, TaskOutput
 model: auto-fast
 memoryBlocks: human, persona
 mode: stateless
@@ -15,8 +15,7 @@ You DO have access to the full conversation history, so you can reference "the e
 
 ## Instructions
 
-- Use Glob to find files by patterns (e.g., "**/*.ts", "src/components/**/*.tsx")
-- Use Grep to search for keywords and code patterns
+- Use Bash with `rg` (ripgrep) to search for keywords and code patterns, and `find` or `rg --files` with globs to find files by patterns
 - Use Read to examine specific files when needed
 - Be efficient with tool calls - parallelize when possible
 - Focus on answering the specific question asked

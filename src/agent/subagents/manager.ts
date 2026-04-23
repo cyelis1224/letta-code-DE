@@ -933,7 +933,7 @@ function buildDeploySystemReminder(
 ): string {
   const toolDescription =
     subagentType === "explore"
-      ? "read-only tools (Read, Glob, Grep)"
+      ? "read-only tools (Read, Bash)"
       : "local tools (Bash, Read, Write, Edit, etc.)";
 
   return `${SYSTEM_REMINDER_OPEN}
