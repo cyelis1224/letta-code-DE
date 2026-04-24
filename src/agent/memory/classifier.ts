@@ -80,6 +80,10 @@ const TYPE_KEYWORDS: Record<MemoryType, RegExp[]> = {
     // Identity and self-description
     /\bI\s+(am|'m|work\s+as|identify\s+as|go\s+by)\b/i,
     /\bmy\s+(name|pronouns|title|role|specialty)\b/i,
+    // Personal history and life events
+    /\bI\s+(used\s+to|grew\s+up|was\s+raised|started|stopped|quit|began)\b/i,
+    /\b(my\s+)?(son|daughter|kid|child|family|parent|partner|spouse)\b/i,
+    /\b(almost\s+died|survived|accident|injury|hospital|trauma)\b/i,
   ],
   semantic: [
     /\b(means|refers to|definition of|is defined as)\b/i,
@@ -148,7 +152,9 @@ export function heuristicClassifyMemory(
         // Boost confidence for first-person preference/identity statements
         if (
           t === "relationship" &&
-          /\b(my|I)\s+(favorite|favourite|prefer|love|am|'m)\b/i.test(combined)
+          /\b(my|I)\s+(favorite|favourite|prefer|love|am|'m|used\s+to|grew\s+up|quit|stopped)\b/i.test(
+            combined,
+          )
         ) {
           typeConfidence = 0.9;
         }
