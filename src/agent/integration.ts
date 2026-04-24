@@ -20,11 +20,7 @@ import {
   createToolCallEvent,
 } from "./events/instrumentation";
 import type { AgentEvent } from "./events/types";
-import {
-  type ActionCategory,
-  hasPermission,
-  logAuditEvent,
-} from "./governance/rbac";
+import { hasPermission, logAuditEvent } from "./governance/rbac";
 import type { MemoryEntry } from "./memory/continuity-schema";
 import { type PipelineResult, processCandidate } from "./memory/pipeline";
 import {
@@ -72,6 +68,8 @@ export interface LanternRuntimeState {
   contextBudget?: ContextBudget;
   /** Events collected during this turn (flushed to audit log on end_turn) */
   turnEvents: AgentEvent[];
+  /** Turns since last reflection cycle (for throttling) */
+  turnsSinceLastReflection?: number;
 }
 
 /**
@@ -246,12 +244,14 @@ export interface PostTurnHookResult {
   hasQueuedCandidates: boolean;
   /** Storage result (if persistence enabled) */
   storageResult?: StorageResult;
+  /** Reflection result (if persistence enabled) */
+  reflectionResult?: import("./memory/reflection").ReflectionResult;
 }
 
 /**
  * Run post-turn hook: extract memory candidates, run through pipeline, persist.
  */
-export function postTurnHook(
+export async function postTurnHook(
   conversationContext: {
     conversationId?: string;
     turnNumber: number;
@@ -264,7 +264,7 @@ export function postTurnHook(
     /** Enable persistence to continuity core */
     persist?: boolean;
   },
-): PostTurnHookResult {
+): Promise<PostTurnHookResult> {
   const candidates: PipelineResult[] = [];
 
   // Extract potential memory from assistant message (reflections, observations)
@@ -313,10 +313,31 @@ export function postTurnHook(
     );
   }
 
+  // Run reflection cycle after persistence
+  let reflectionResult:
+    | import("./memory/reflection").ReflectionResult
+    | undefined;
+  if (options?.persist && conversationContext.agentId) {
+    const { runReflectionCycle } = await import("./memory/reflection");
+    reflectionResult = runReflectionCycle({
+      turnEvents: state.turnEvents,
+      agentId: conversationContext.agentId,
+      conversationId: conversationContext.conversationId,
+      turnsSinceLastReflection: state.turnsSinceLastReflection ?? 0,
+    });
+    if (reflectionResult.ran) {
+      state.turnsSinceLastReflection = 0;
+    } else {
+      state.turnsSinceLastReflection =
+        (state.turnsSinceLastReflection ?? 0) + 1;
+    }
+  }
+
   return {
     pipelineResults: candidates,
     hasQueuedCandidates: candidates.some((c) => c.decision === "queued"),
     storageResult,
+    reflectionResult,
   };
 }
 

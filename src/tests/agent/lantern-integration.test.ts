@@ -5,7 +5,6 @@ import {
   createInitialRuntimeState,
   flushTurnEvents,
   getLanternStatus,
-  type LanternRuntimeState,
   postTurnHook,
   preTurnHook,
 } from "../../agent/integration";
@@ -63,8 +62,8 @@ describe("preTurnHook", () => {
     preTurnHook("Implement the feature", state);
 
     expect(state.modelSelection).toBeDefined();
-    expect(state.modelSelection!.model).toBeTruthy();
-    expect(state.modelSelection!.reason).toBeTruthy();
+    expect(state.modelSelection?.model).toBeTruthy();
+    expect(state.modelSelection?.reason).toBeTruthy();
   });
 
   it("stores context budget on state", () => {
@@ -72,9 +71,9 @@ describe("preTurnHook", () => {
     preTurnHook("Research the API", state);
 
     expect(state.contextBudget).toBeDefined();
-    expect(state.contextBudget!.totalTokens).toBeGreaterThan(0);
-    expect(state.contextBudget!.identityBudget).toBeGreaterThan(0);
-    expect(state.contextBudget!.memoryBudget).toBeGreaterThan(0);
+    expect(state.contextBudget?.totalTokens).toBeGreaterThan(0);
+    expect(state.contextBudget?.identityBudget).toBeGreaterThan(0);
+    expect(state.contextBudget?.memoryBudget).toBeGreaterThan(0);
   });
 
   it("emits mode_change event when mode transitions", () => {
@@ -123,9 +122,9 @@ describe("preTurnHook", () => {
 // ============================================================================
 
 describe("postTurnHook", () => {
-  it("stores pipeline results on state", () => {
+  it("stores pipeline results on state", async () => {
     const state = createInitialRuntimeState();
-    const result = postTurnHook(
+    const result = await postTurnHook(
       {
         turnNumber: 1,
         assistantMessage: "I've fixed the bug by adding null checks.",
@@ -138,9 +137,9 @@ describe("postTurnHook", () => {
     expect(result.pipelineResults).toBe(state.lastPipelineResults);
   });
 
-  it("detects queued candidates", () => {
+  it("detects queued candidates", async () => {
     const state = createInitialRuntimeState();
-    const result = postTurnHook(
+    const result = await postTurnHook(
       {
         turnNumber: 1,
         assistantMessage: "I've observed that the user prefers TypeScript.",
@@ -155,9 +154,9 @@ describe("postTurnHook", () => {
     expect(typeof result.hasQueuedCandidates).toBe("boolean");
   });
 
-  it("handles empty messages gracefully", () => {
+  it("handles empty messages gracefully", async () => {
     const state = createInitialRuntimeState();
-    const result = postTurnHook(
+    const result = await postTurnHook(
       {
         turnNumber: 1,
       },
@@ -239,8 +238,8 @@ describe("getLanternStatus", () => {
     const status = getLanternStatus(state);
 
     expect(status).not.toContain("(not yet selected)");
-    expect(state.modelSelection!.model).toBeTruthy();
-    expect(status).toContain(state.modelSelection!.model);
+    expect(state.modelSelection?.model).toBeTruthy();
+    expect(status).toContain(state.modelSelection?.model ?? "");
   });
 
   it("shows pipeline results after postTurnHook runs", () => {

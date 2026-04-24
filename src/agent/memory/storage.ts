@@ -19,15 +19,10 @@ import { getMemoryFilesystemRoot } from "../memoryFilesystem";
 import type { MemoryEntry, MemoryEntryFrontmatter } from "./continuity-schema";
 import { buildMemoryPath, serializeMemoryEntry } from "./continuity-schema";
 import type { PipelineResult } from "./pipeline";
-import {
-  loadMemoryIndex,
-  queryMemories,
-  rebuildMemoryIndex,
-} from "./retrieval";
+import { queryMemories, rebuildMemoryIndex } from "./retrieval";
 import type { MemoryImportance, MemorySensitivity } from "./taxonomy";
 import {
   DEFAULT_IMPORTANCE_BY_TYPE,
-  DEFAULT_SENSITIVITY_BY_TYPE,
   MEMORY_TYPE_DIRECTORIES,
 } from "./taxonomy";
 
@@ -47,7 +42,7 @@ export interface StorageConfig {
 }
 
 export const DEFAULT_STORAGE_CONFIG: StorageConfig = {
-  autoStoreThreshold: 0.7,
+  autoStoreThreshold: 0.6,
   maxAutoStoreSensitivity: "public",
   updateIndexOnStore: true,
 };
@@ -164,7 +159,7 @@ export function storePipelineResults(
  */
 function pipelineResultToEntry(
   result: PipelineResult,
-  agentId: string,
+  _agentId: string,
   conversationId?: string,
   turnNumber?: number,
   reviewStatus: MemoryEntryFrontmatter["reviewStatus"] = "auto",
@@ -222,7 +217,7 @@ function classifyImportance(result: PipelineResult): MemoryImportance {
 /**
  * Infer project tags from candidate content.
  */
-function inferProjects(result: PipelineResult): string[] | undefined {
+function inferProjects(_result: PipelineResult): string[] | undefined {
   // TODO: Extract project references from content
   // For now, return undefined - this can be enhanced later
   return undefined;
@@ -259,7 +254,7 @@ function appendToAuditLog(
     preview: entry.content.slice(0, 100),
   };
 
-  appendFileSync(logPath, JSON.stringify(logEntry) + "\n", "utf-8");
+  appendFileSync(logPath, `${JSON.stringify(logEntry)}\n`, "utf-8");
 }
 
 // ============================================================================

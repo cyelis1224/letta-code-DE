@@ -5089,7 +5089,7 @@ export default function App({
                 );
                 // Use a lightweight runtime state for the pipeline
                 const runtimeState = createInitialRuntimeState();
-                const result = lanternPostTurn(
+                const result = await lanternPostTurn(
                   {
                     conversationId: conversationIdRef.current ?? undefined,
                     turnNumber: 0,
@@ -5107,6 +5107,12 @@ export default function App({
                   debugLog(
                     "continuity",
                     `Persisted ${result.storageResult.stored.length} memories`,
+                  );
+                }
+                if (result.reflectionResult?.ran) {
+                  debugLog(
+                    "continuity",
+                    `Reflection: ${result.reflectionResult.patterns.length} patterns, ${result.reflectionResult.proposals.length} proposals`,
                   );
                 }
               } catch (err) {

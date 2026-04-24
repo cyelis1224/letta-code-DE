@@ -73,6 +73,13 @@ const TYPE_KEYWORDS: Record<MemoryType, RegExp[]> = {
     /\btheir\s+(style|preference|approach|habit|pattern)\b/i,
     /\b(communication|working)\s+style\b/i,
     /\b(they|user)\s+(like|don'?t\s+like|appreciate|get\s+frustrated)\b/i,
+    // Direct preference statements
+    /\b(my|I)\s+(favorite|favourite|preferred|preference)\b/i,
+    /\bI\s+(love|hate|prefer|enjoy|can'?t\s+stand|really\s+like|don'?t\s+like)\b/i,
+    /\b(my|the)\s+(color|colour|food|music|language|editor|tool|framework|stack|font|theme|shell)\s+(is|of\s+choice|of\s+preference)\b/i,
+    // Identity and self-description
+    /\bI\s+(am|'m|work\s+as|identify\s+as|go\s+by)\b/i,
+    /\bmy\s+(name|pronouns|title|role|specialty)\b/i,
   ],
   semantic: [
     /\b(means|refers to|definition of|is defined as)\b/i,
@@ -138,6 +145,13 @@ export function heuristicClassifyMemory(
       if (pattern.test(combined)) {
         type = t as MemoryType;
         typeConfidence = 0.7;
+        // Boost confidence for first-person preference/identity statements
+        if (
+          t === "relationship" &&
+          /\b(my|I)\s+(favorite|favourite|prefer|love|am|'m)\b/i.test(combined)
+        ) {
+          typeConfidence = 0.9;
+        }
         break;
       }
     }
@@ -221,9 +235,9 @@ function generateDescriptionFromContent(
   const truncated = firstSentence.slice(0, maxLength - 3);
   const lastSpace = truncated.lastIndexOf(" ");
   if (lastSpace > 0) {
-    return truncated.slice(0, lastSpace).trim() + "...";
+    return `${truncated.slice(0, lastSpace).trim()}...`;
   }
-  return truncated.trim() + "...";
+  return `${truncated.trim()}...`;
 }
 
 /**

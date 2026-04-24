@@ -75,11 +75,11 @@ export interface ScoringResult {
  */
 const AUTO_APPROVE_THRESHOLDS = {
   /** Minimum score for auto-approval */
-  minScore: 0.7,
+  minScore: 0.6,
   /** Maximum sensitivity for auto-approval (public only) */
   maxSensitivity: "public" as MemorySensitivity,
   /** Minimum classification confidence for auto-approval */
-  minConfidence: 0.8,
+  minConfidence: 0.7,
   /** Maximum contradiction risk for auto-approval */
   maxContradictionRisk: 0.3,
 };
@@ -146,10 +146,10 @@ export function scoreCandidate(
 
   // Calculate overall score (weighted average)
   const weights = {
-    novelty: 0.25,
-    utility: 0.25,
-    classificationConfidence: 0.2,
-    contradictionRisk: -0.2, // Negative weight
+    novelty: 0.2,
+    utility: 0.3,
+    classificationConfidence: 0.25,
+    contradictionRisk: -0.15, // Negative weight
     stalenessRisk: -0.1, // Negative weight
   };
 

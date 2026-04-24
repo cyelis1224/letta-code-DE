@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import {
   augmentSystemPrompt,
   checkToolPermission,
@@ -74,9 +74,9 @@ describe("Pre-turn hook", () => {
 });
 
 describe("Post-turn hook", () => {
-  it("processes conversation for memory candidates", () => {
+  it("processes conversation for memory candidates", async () => {
     const state = createInitialRuntimeState();
-    const result = postTurnHook(
+    const result = await postTurnHook(
       {
         conversationId: "test-conv",
         turnNumber: 1,
@@ -92,9 +92,9 @@ describe("Post-turn hook", () => {
     );
   });
 
-  it("detects queued candidates", () => {
+  it("detects queued candidates", async () => {
     const state = createInitialRuntimeState();
-    const result = postTurnHook(
+    const result = await postTurnHook(
       {
         conversationId: "test-conv",
         turnNumber: 1,
@@ -105,7 +105,8 @@ describe("Post-turn hook", () => {
 
     // The API key mention should trigger sensitive classification
     const sensitiveResult = result.pipelineResults.find(
-      (r) => r.classification.sensitivity === "sensitive",
+      (r: { classification: { sensitivity: string } }) =>
+        r.classification.sensitivity === "sensitive",
     );
     // If we found a sensitive result, it should be queued
     if (sensitiveResult) {
