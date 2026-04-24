@@ -11115,6 +11115,7 @@ ${SYSTEM_REMINDER_CLOSE}
 
       // EIM context injection — add as a reminder part so it uses the same
       // delivery mechanism as other system-reminder blocks the agent can see.
+      let eimTypePriority: string[] | undefined;
       if (settingsManager.isReady && settingsManager.isEIMEnabled(agentId)) {
         try {
           const { loadEIMConfig, compileEIMTurnContext } = await import(
@@ -11135,6 +11136,8 @@ ${SYSTEM_REMINDER_CLOSE}
               `no context produced (taskKind=${result.taskKind})`,
             );
           }
+          // Capture EIM-resolved memory type priority for retrieval
+          eimTypePriority = result.memoryTypePriority;
         } catch (err) {
           debugWarn("EIM", "Failed to inject EIM context:", err);
         }
@@ -11150,6 +11153,7 @@ ${SYSTEM_REMINDER_CLOSE}
           const taskKind = classifyTask(userTextForInput);
           const memories = retrieveMemoriesForTurn(taskKind, agentId, {
             limit: 5,
+            eimTypePriority,
           });
           if (memories.length > 0) {
             const memoryBlock = memories

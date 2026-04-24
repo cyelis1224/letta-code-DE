@@ -56,6 +56,8 @@ export interface CompileEIMTurnContextResult {
   taskKind: TaskKind;
   /** The resolved operation mode. */
   resolvedMode: OperationMode;
+  /** EIM-resolved memory type priority for retrieval (overrides taxonomy defaults). */
+  memoryTypePriority: string[];
 }
 
 /**
@@ -170,7 +172,12 @@ export function compileEIMTurnContext(
 
   // No useful directives — skip injection
   if (parts.length === 0) {
-    return { eimContext: null, taskKind, resolvedMode };
+    return {
+      eimContext: null,
+      taskKind,
+      resolvedMode,
+      memoryTypePriority: eimSlice.memoryTypePriority,
+    };
   }
 
   // Wrap in system-reminder tags
@@ -179,6 +186,7 @@ export function compileEIMTurnContext(
     eimContext: `${SYSTEM_REMINDER_OPEN}\n${body}\n${SYSTEM_REMINDER_CLOSE}`,
     taskKind,
     resolvedMode,
+    memoryTypePriority: eimSlice.memoryTypePriority,
   };
 }
 

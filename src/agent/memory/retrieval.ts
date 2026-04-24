@@ -22,7 +22,11 @@ import type {
   MemoryQueryResult,
   RetrievedMemory,
 } from "./continuity-schema";
-import { MEMORY_TYPE_DIRECTORIES, TASK_MEMORY_PRIORITY } from "./taxonomy";
+import {
+  MEMORY_TYPE_DIRECTORIES,
+  type MemoryType,
+  TASK_MEMORY_PRIORITY,
+} from "./taxonomy";
 
 // ============================================================================
 // Index Management
@@ -138,6 +142,7 @@ export function queryMemories(
   query: MemoryQuery,
   memoryRoot: string,
   taskKind?: TaskKind,
+  eimTypePriority?: string[],
 ): MemoryQueryResult {
   const startTime = Date.now();
 
@@ -147,10 +152,13 @@ export function queryMemories(
     index = rebuildMemoryIndex(memoryRoot);
   }
 
-  // Determine type priority from task kind
-  const typePriority = taskKind
-    ? TASK_MEMORY_PRIORITY[taskKind] || []
-    : undefined;
+  // Determine type priority: EIM override > task-based defaults
+  const typePriority =
+    eimTypePriority && eimTypePriority.length > 0
+      ? eimTypePriority
+      : taskKind
+        ? TASK_MEMORY_PRIORITY[taskKind] || []
+        : undefined;
 
   // Collect candidate entries
   let candidates: MemoryIndexEntry[] = [];
@@ -161,9 +169,9 @@ export function queryMemories(
       candidates.push(...(index.byType[type] || []));
     }
   } else if (typePriority && typePriority.length > 0) {
-    // Use task-based priority
+    // Use task-based priority (from EIM or taxonomy defaults)
     for (const type of typePriority) {
-      candidates.push(...(index.byType[type] || []));
+      candidates.push(...(index.byType[type as MemoryType] || []));
     }
   } else {
     // All types, sorted by recency
