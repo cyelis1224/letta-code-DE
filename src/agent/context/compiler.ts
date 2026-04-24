@@ -277,6 +277,22 @@ export function compileContext(
     excludePaths: [],
   };
 
+  // Include pattern trace when EIM says to
+  if (eimSlice.includePatternTrace) {
+    memoryRetrieval.includePaths = [
+      ...(memoryRetrieval.includePaths ?? []),
+      "reference/patterns/trace.md",
+    ];
+  }
+
+  // Include open loops when EIM says to
+  if (eimSlice.includeOpenLoops) {
+    memoryRetrieval.includePaths = [
+      ...(memoryRetrieval.includePaths ?? []),
+      "reference/open-loops/loops.json",
+    ];
+  }
+
   return {
     taskKind,
     activeMode,

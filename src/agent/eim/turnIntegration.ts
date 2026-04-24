@@ -159,6 +159,18 @@ export function compileEIMTurnContext(
     parts.push(fragments.memoryRetrievalHint);
   }
 
+  if (fragments.patternAwarenessDirective?.trim()) {
+    parts.push(fragments.patternAwarenessDirective);
+  }
+
+  if (fragments.openLoopDirective?.trim()) {
+    parts.push(fragments.openLoopDirective);
+  }
+
+  if (fragments.surfacingEtiquetteDirective?.trim()) {
+    parts.push(fragments.surfacingEtiquetteDirective);
+  }
+
   // Add mode-specific tool access directive when mode state is available
   if (options?.modeState) {
     const toolDirective = renderToolAccessDirective(

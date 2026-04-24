@@ -9,14 +9,21 @@
  * Proposals are queued for review — they are never auto-applied.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent, AgentEventType } from "../events/types";
 import { getMemoryFilesystemRoot } from "../memoryFilesystem";
 import type { MemoryEntry } from "./continuity-schema";
 import { parseMemoryEntry } from "./continuity-schema";
+import {
+  detectOpenLoops,
+  type OpenLoop,
+  type OpenLoopDetectionInput,
+  writeOpenLoops,
+} from "./open-loops";
 import { loadMemoryIndex, queryMemories } from "./retrieval";
 import type { MemoryType } from "./taxonomy";
+import { MEMORY_TYPES } from "./taxonomy";
 
 // ============================================================================
 // Reflection Input
@@ -34,6 +41,8 @@ export interface ReflectionInput {
   conversationId?: string;
   /** How many turns since last reflection (for throttling) */
   turnsSinceLastReflection: number;
+  /** Current task kind (for mode-dominance detection) */
+  currentTaskKind?: string;
 }
 
 /**
@@ -66,13 +75,18 @@ export interface DetectedPattern {
     | "memory_stale" // Memory not accessed in a long time
     | "preference_repeated" // User stated same preference multiple times
     | "correction" // User corrected the agent
-    | "workflow"; // Detectable workflow pattern
+    | "workflow" // Detectable workflow pattern
+    | "structural_correlation" // Behavior correlated with context that wasn't chosen
+    | "distribution_imbalance" // The shape of sessions over time
+    | "absence_pattern"; // What the agent is NOT doing
   /** Description of the pattern */
   description: string;
   /** Evidence supporting this pattern */
   evidence: string[];
   /** Confidence in the detection (0-1) */
   confidence: number;
+  /** Pattern category */
+  category: "operational" | "structural" | "distribution" | "absence";
 }
 
 /**
@@ -82,6 +96,7 @@ export function detectPatterns(
   events: AgentEvent[],
   auditEntries: AuditLogEntry[],
   memories: MemoryEntry[],
+  currentTaskKind?: string,
 ): DetectedPattern[] {
   const patterns: DetectedPattern[] = [];
 
@@ -100,6 +115,7 @@ export function detectPatterns(
         description: `Tool "${tool}" used ${count} times in recent turns`,
         evidence: [`${tool}: ${count} invocations`],
         confidence: 0.8,
+        category: "operational",
       });
     }
   }
@@ -120,6 +136,7 @@ export function detectPatterns(
         description: `Mode transition "${transition}" occurred ${count} times`,
         evidence: [`Transition: ${transition}, count: ${count}`],
         confidence: 0.7,
+        category: "operational",
       });
     }
   }
@@ -137,6 +154,7 @@ export function detectPatterns(
           `Preview: ${memory.content.slice(0, 80)}`,
         ],
         confidence: 0.9,
+        category: "operational",
       });
     }
   }
@@ -158,6 +176,7 @@ export function detectPatterns(
           `Preview: ${memory.content.slice(0, 80)}`,
         ],
         confidence: 0.6,
+        category: "operational",
       });
     }
   }
@@ -181,6 +200,7 @@ export function detectPatterns(
           `Last accessed: ${memory.frontmatter.lastAccessedAt}`,
         ],
         confidence: 0.7,
+        category: "operational",
       });
     }
   }
@@ -195,10 +215,403 @@ export function detectPatterns(
         (e) => `Score: ${e.score}, preview: ${e.preview.slice(0, 60)}`,
       ),
       confidence: 0.5,
+      category: "operational",
     });
   }
 
+  // Structural, distribution, and absence patterns
+  patterns.push(
+    ...detectStructuralPatterns(events, memories),
+    ...detectDistributionPatterns(auditEntries, events, currentTaskKind),
+    ...detectAbsencePatterns(memories, auditEntries),
+  );
+
   return patterns;
+}
+
+// ============================================================================
+// Structural Pattern Detection
+// ============================================================================
+
+/**
+ * Detect structural patterns — behavior correlated with context that wasn't
+ * chosen, or structural anomalies in how the agent operates.
+ */
+function detectStructuralPatterns(
+  events: AgentEvent[],
+  memories: MemoryEntry[],
+): DetectedPattern[] {
+  const patterns: DetectedPattern[] = [];
+
+  // Mode re-entry: entering a mode and quickly bouncing back
+  // (same mode entered twice within 5 events)
+  const modeEvents = events.filter((e) => e.type === "mode_change");
+  for (let i = 0; i < modeEvents.length; i++) {
+    const current = modeEvents[i] as { from: string; to: string; id: string };
+    for (let j = i + 1; j < Math.min(i + 5, modeEvents.length); j++) {
+      const later = modeEvents[j] as { from: string; to: string; id: string };
+      if (current.to === later.to) {
+        patterns.push({
+          kind: "structural_correlation",
+          description: `Mode re-entry detected: mode "${current.to}" entered twice within 5 mode-change events`,
+          evidence: [
+            `First entry: ${current.from}->${current.to} (event ${current.id})`,
+            `Re-entry: ${later.from}->${later.to} (event ${later.id})`,
+          ],
+          confidence: 0.6,
+          category: "structural",
+        });
+        break; // Only report once per re-entry cluster
+      }
+    }
+  }
+
+  // Storage type skew: one memory type accounts for >60% of all stored memories
+  if (memories.length > 0) {
+    const typeCounts: Record<string, number> = {};
+    for (const memory of memories) {
+      typeCounts[memory.frontmatter.type] =
+        (typeCounts[memory.frontmatter.type] || 0) + 1;
+    }
+    const total = memories.length;
+    for (const [type, count] of Object.entries(typeCounts)) {
+      const ratio = count / total;
+      if (ratio > 0.6) {
+        patterns.push({
+          kind: "structural_correlation",
+          description: `Storage type skew: "${type}" accounts for ${(ratio * 100).toFixed(0)}% of all memories (${count}/${total})`,
+          evidence: [
+            `Type: ${type}`,
+            `Count: ${count}`,
+            `Total: ${total}`,
+            `Ratio: ${ratio.toFixed(2)}`,
+          ],
+          confidence: 0.7,
+          category: "structural",
+        });
+      }
+    }
+  }
+
+  return patterns;
+}
+
+// ============================================================================
+// Distribution Pattern Detection
+// ============================================================================
+
+/**
+ * Detect distribution patterns — the shape of sessions over time,
+ * imbalances in how the agent's activity is distributed.
+ */
+function detectDistributionPatterns(
+  auditEntries: AuditLogEntry[],
+  events: AgentEvent[],
+  currentTaskKind?: string,
+): DetectedPattern[] {
+  const patterns: DetectedPattern[] = [];
+
+  // Retrieval skew: one memory type accounts for >70% of all audit entries
+  if (auditEntries.length > 0) {
+    const typeCounts: Record<string, number> = {};
+    for (const entry of auditEntries) {
+      typeCounts[entry.type] = (typeCounts[entry.type] || 0) + 1;
+    }
+    const total = auditEntries.length;
+    for (const [type, count] of Object.entries(typeCounts)) {
+      const ratio = count / total;
+      if (ratio > 0.7) {
+        patterns.push({
+          kind: "distribution_imbalance",
+          description: `Retrieval skew: "${type}" accounts for ${(ratio * 100).toFixed(0)}% of all audit entries (${count}/${total})`,
+          evidence: [
+            `Type: ${type}`,
+            `Count: ${count}`,
+            `Total: ${total}`,
+            `Ratio: ${ratio.toFixed(2)}`,
+          ],
+          confidence: 0.65,
+          category: "distribution",
+        });
+      }
+    }
+  }
+
+  // Mode dominance: no mode changes in events when currentTaskKind is
+  // "reflection" (stuck in one mode)
+  if (currentTaskKind === "reflection") {
+    const hasModeChange = events.some((e) => e.type === "mode_change");
+    if (!hasModeChange && events.length > 0) {
+      patterns.push({
+        kind: "distribution_imbalance",
+        description: `Mode dominance: no mode changes during reflection task — agent may be stuck in one mode`,
+        evidence: [
+          `Current task: ${currentTaskKind}`,
+          `Events: ${events.length}`,
+          `Mode changes: 0`,
+        ],
+        confidence: 0.55,
+        category: "distribution",
+      });
+    }
+  }
+
+  return patterns;
+}
+
+// ============================================================================
+// Absence Pattern Detection
+// ============================================================================
+
+/**
+ * Detect absence patterns — what the agent is NOT doing.
+ * These are the most subtle patterns: things that should be present
+ * but aren't.
+ */
+function detectAbsencePatterns(
+  memories: MemoryEntry[],
+  auditEntries: AuditLogEntry[],
+): DetectedPattern[] {
+  const patterns: DetectedPattern[] = [];
+  const now = Date.now();
+
+  // Critical reflective memories never accessed
+  // (importance=high, type=reflective, accessCount=0, age>7 days)
+  for (const memory of memories) {
+    if (
+      memory.frontmatter.importance === "high" &&
+      memory.frontmatter.type === "reflective" &&
+      memory.frontmatter.accessCount === 0
+    ) {
+      const ageDays =
+        (now - new Date(memory.frontmatter.createdAt).getTime()) /
+        (1000 * 60 * 60 * 24);
+      if (ageDays > 7) {
+        patterns.push({
+          kind: "absence_pattern",
+          description: `Critical reflective memory "${memory.frontmatter.id}" never accessed (${ageDays.toFixed(0)} days old)`,
+          evidence: [
+            `ID: ${memory.frontmatter.id}`,
+            `Type: ${memory.frontmatter.type}`,
+            `Importance: ${memory.frontmatter.importance}`,
+            `Access count: ${memory.frontmatter.accessCount}`,
+            `Created: ${memory.frontmatter.createdAt}`,
+          ],
+          confidence: 0.7,
+          category: "absence",
+        });
+      }
+    }
+  }
+
+  // Empty memory categories (any MemoryType with zero entries in memories array)
+  const presentTypes = new Set(memories.map((m) => m.frontmatter.type));
+  for (const type of MEMORY_TYPES) {
+    if (!presentTypes.has(type)) {
+      patterns.push({
+        kind: "absence_pattern",
+        description: `Empty memory category: no "${type}" memories stored`,
+        evidence: [
+          `Type: ${type}`,
+          `Present types: ${[...presentTypes].join(", ") || "(none)"}`,
+        ],
+        confidence: 0.5,
+        category: "absence",
+      });
+    }
+  }
+
+  // Missing reflection events in audit log
+  // (no entries with action containing "reflection" when there are >10 audit entries)
+  if (auditEntries.length > 10) {
+    const hasReflectionEntry = auditEntries.some((e) =>
+      e.action.toLowerCase().includes("reflection"),
+    );
+    if (!hasReflectionEntry) {
+      patterns.push({
+        kind: "absence_pattern",
+        description: `No reflection events in audit log despite ${auditEntries.length} total entries`,
+        evidence: [
+          `Total audit entries: ${auditEntries.length}`,
+          `Reflection entries: 0`,
+        ],
+        confidence: 0.6,
+        category: "absence",
+      });
+    }
+  }
+
+  return patterns;
+}
+
+// ============================================================================
+// Pattern Trace
+// ============================================================================
+
+const PATTERN_TRACE_PATH = "reference/patterns/trace.md";
+
+/**
+ * A single entry in the pattern trace — a persistent record of
+ * structural, distribution, and absence patterns observed over time.
+ */
+interface PatternTraceEntry {
+  /** The pattern that was detected */
+  pattern: DetectedPattern;
+  /** Trace type: structural, distribution, or absence */
+  type: "structural" | "distribution" | "absence";
+  /** Evidence at time of detection */
+  evidence: string[];
+  /** When this pattern was first observed */
+  firstObserved: string;
+  /** When this pattern was most recently observed */
+  lastObserved: string;
+  /** How many times this pattern has been observed */
+  frequency: number;
+}
+
+/**
+ * Write pattern trace entries to the persistent trace file.
+ *
+ * Merges new patterns with existing trace, updates frequency and
+ * lastObserved for recurring patterns, and prunes entries not
+ * observed in 30 days.
+ */
+function writePatternTrace(
+  newPatterns: DetectedPattern[],
+  memoryRoot: string,
+): void {
+  const tracePath = join(memoryRoot, PATTERN_TRACE_PATH);
+  const traceDir = join(memoryRoot, "reference", "patterns");
+
+  // Ensure directory exists
+  if (!existsSync(traceDir)) {
+    mkdirSync(traceDir, { recursive: true });
+  }
+
+  // Load existing trace
+  const existing = loadPatternTrace(memoryRoot);
+
+  // Build a map keyed by pattern kind + description for deduplication
+  const traceMap = new Map<string, PatternTraceEntry>();
+  for (const entry of existing) {
+    traceMap.set(`${entry.pattern.kind}|${entry.pattern.description}`, entry);
+  }
+
+  const now = new Date().toISOString();
+
+  // Merge new patterns
+  for (const pattern of newPatterns) {
+    const key = `${pattern.kind}|${pattern.description}`;
+    const existingEntry = traceMap.get(key);
+    if (existingEntry) {
+      // Update existing entry
+      existingEntry.lastObserved = now;
+      existingEntry.frequency += 1;
+      existingEntry.evidence = pattern.evidence;
+    } else {
+      // New entry
+      traceMap.set(key, {
+        pattern,
+        type: pattern.category as PatternTraceEntry["type"],
+        evidence: pattern.evidence,
+        firstObserved: now,
+        lastObserved: now,
+        frequency: 1,
+      });
+    }
+  }
+
+  // Prune entries not observed in 30 days
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const pruned = Array.from(traceMap.values()).filter((entry) => {
+    return new Date(entry.lastObserved).getTime() >= thirtyDaysAgo;
+  });
+
+  // Write as markdown
+  const lines: string[] = [
+    "# Pattern Trace",
+    "",
+    `Last updated: ${now}`,
+    "",
+    "Persistent record of structural, distribution, and absence patterns.",
+    "",
+  ];
+
+  for (const entry of pruned) {
+    lines.push(`## ${entry.pattern.kind}`);
+    lines.push(`- **Description**: ${entry.pattern.description}`);
+    lines.push(`- **Type**: ${entry.type}`);
+    lines.push(`- **First observed**: ${entry.firstObserved}`);
+    lines.push(`- **Last observed**: ${entry.lastObserved}`);
+    lines.push(`- **Frequency**: ${entry.frequency}`);
+    lines.push(`- **Confidence**: ${entry.pattern.confidence}`);
+    lines.push(`- **Evidence**: ${entry.evidence.join("; ")}`);
+    lines.push("");
+  }
+
+  writeFileSync(tracePath, lines.join("\n"), "utf-8");
+}
+
+/**
+ * Load pattern trace entries from the persistent trace file.
+ */
+function loadPatternTrace(memoryRoot: string): PatternTraceEntry[] {
+  const tracePath = join(memoryRoot, PATTERN_TRACE_PATH);
+  if (!existsSync(tracePath)) return [];
+
+  try {
+    const content = readFileSync(tracePath, "utf-8");
+    // Parse the markdown trace file back into structured entries
+    const entries: PatternTraceEntry[] = [];
+    const sections = content.split(/^## /m).slice(1); // Skip the header
+
+    for (const section of sections) {
+      const lines = section.split("\n");
+      const kind = lines[0]?.trim() || "";
+      const description =
+        section.match(/\*\*Description\*\*:\s*(.+)/)?.[1]?.trim() || "";
+      const type = section.match(/\*\*Type\*\*:\s*(.+)/)?.[1]?.trim() as
+        | PatternTraceEntry["type"]
+        | undefined;
+      const firstObserved =
+        section.match(/\*\*First observed\*\*:\s*(.+)/)?.[1]?.trim() || "";
+      const lastObserved =
+        section.match(/\*\*Last observed\*\*:\s*(.+)/)?.[1]?.trim() || "";
+      const frequency = parseInt(
+        section.match(/\*\*Frequency\*\*:\s*(\d+)/)?.[1] || "1",
+        10,
+      );
+      const confidence = parseFloat(
+        section.match(/\*\*Confidence\*\*:\s*([\d.]+)/)?.[1] || "0.5",
+      );
+      const evidenceStr =
+        section.match(/\*\*Evidence\*\*:\s*(.+)/)?.[1]?.trim() || "";
+      const evidence = evidenceStr
+        ? evidenceStr.split("; ").filter(Boolean)
+        : [];
+
+      if (kind && description && type) {
+        entries.push({
+          pattern: {
+            kind: kind as DetectedPattern["kind"],
+            description,
+            evidence,
+            confidence,
+            category: type,
+          },
+          type,
+          evidence,
+          firstObserved,
+          lastObserved,
+          frequency,
+        });
+      }
+    }
+
+    return entries;
+  } catch {
+    return [];
+  }
 }
 
 // ============================================================================
@@ -348,6 +761,27 @@ export function generateProposals(
         break;
       }
 
+      case "structural_correlation":
+      case "distribution_imbalance":
+      case "absence_pattern": {
+        // Structural/distribution/absence patterns are observations, not corrections
+        proposals.push({
+          id: `proposal-${++proposalCounter}-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          pattern,
+          action: "flag_for_review",
+          description: pattern.description,
+          changes: {
+            category: pattern.category,
+            kind: pattern.kind,
+          },
+          confidence: pattern.confidence * 0.4,
+          reviewStatus: "pending",
+          reason: `Observation (${pattern.category}): ${pattern.description}`,
+        });
+        break;
+      }
+
       default: {
         // Generic flag for review
         proposals.push({
@@ -384,6 +818,8 @@ export interface ReflectionResult {
   ran: boolean;
   /** Reason if it didn't run */
   skippedReason?: string;
+  /** Open loops detected */
+  openLoops: OpenLoop[];
 }
 
 /**
@@ -406,6 +842,7 @@ export function runReflectionCycle(input: ReflectionInput): ReflectionResult {
       proposals: [],
       ran: false,
       skippedReason: `Only ${input.turnsSinceLastReflection} turns since last reflection (minimum 5)`,
+      openLoops: [],
     };
   }
 
@@ -442,7 +879,12 @@ export function runReflectionCycle(input: ReflectionInput): ReflectionResult {
   }
 
   // Detect patterns
-  const patterns = detectPatterns(input.turnEvents, auditEntries, memories);
+  const patterns = detectPatterns(
+    input.turnEvents,
+    auditEntries,
+    memories,
+    input.currentTaskKind,
+  );
 
   // Generate proposals
   const proposals = generateProposals(patterns);
@@ -452,10 +894,34 @@ export function runReflectionCycle(input: ReflectionInput): ReflectionResult {
     writeProposalsToQueue(proposals, memoryRoot);
   }
 
+  // Write pattern trace (structural/distribution/absence observations)
+  const tracePatterns = patterns.filter(
+    (p) =>
+      p.category === "structural" ||
+      p.category === "distribution" ||
+      p.category === "absence",
+  );
+  if (tracePatterns.length > 0) {
+    writePatternTrace(tracePatterns, memoryRoot);
+  }
+
+  // Detect open loops — threads that were alive and then stopped
+  const openLoopInput: OpenLoopDetectionInput = {
+    turnEvents: input.turnEvents,
+    auditEntries:
+      auditEntries as unknown as OpenLoopDetectionInput["auditEntries"],
+    memories,
+  };
+  const openLoops = detectOpenLoops(openLoopInput);
+  if (openLoops.length > 0) {
+    writeOpenLoops(openLoops, memoryRoot);
+  }
+
   return {
     patterns,
     proposals,
     ran: true,
+    openLoops,
   };
 }
 

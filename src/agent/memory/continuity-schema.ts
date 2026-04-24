@@ -58,6 +58,10 @@ export interface MemoryEntryFrontmatter {
   tags: string[];
   /** Projects this memory is relevant to (for project-scoped retrieval) */
   projects?: string[];
+  /** Whether this memory is eligible for open loop detection */
+  loopEligible?: boolean;
+  /** Intent to resume this thread (stronger signal for open loop detection) */
+  intentToResume?: "possible" | "likely" | "unlikely";
 }
 
 /**
@@ -258,6 +262,8 @@ export function serializeMemoryEntry(entry: MemoryEntry): string {
     fm.projects
       ? `projects: [${fm.projects.map((p) => `"${p}"`).join(", ")}]`
       : null,
+    fm.loopEligible !== undefined ? `loopEligible: ${fm.loopEligible}` : null,
+    fm.intentToResume ? `intentToResume: ${fm.intentToResume}` : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -320,6 +326,9 @@ export function parseMemoryEntry(
       reviewStatus: fm.reviewStatus as MemoryEntryFrontmatter["reviewStatus"],
       tags: (fm.tags as string[]) || [],
       projects: fm.projects as string[] | undefined,
+      loopEligible: fm.loopEligible === "true",
+      intentToResume:
+        fm.intentToResume as MemoryEntryFrontmatter["intentToResume"],
     },
     content: body.trim(),
     path,

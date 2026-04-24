@@ -9,7 +9,12 @@
  * that the model actually reads.
  */
 
-import type { EIMBoundaries, EIMContextSlice, EIMStyle } from "./types";
+import type {
+  EIMBoundaries,
+  EIMContextSlice,
+  EIMStyle,
+  SurfacingEtiquetteConfig,
+} from "./types";
 
 // ============================================================================
 // Style → Prompt
@@ -163,6 +168,9 @@ export interface EIMPromptFragments {
   continuityDirective: string;
   /** Memory retrieval hint — placed near the recall/retrieval section */
   memoryRetrievalHint: string;
+  patternAwarenessDirective?: string;
+  openLoopDirective?: string;
+  surfacingEtiquetteDirective?: string;
   /** Whether to include the full prose persona in the prompt */
   includeFullPersona: boolean;
   /** The task kind this was compiled for (for debugging/logging) */
@@ -180,9 +188,65 @@ export function compileEIMPromptFragments(
     boundariesDirective: renderBoundariesDirective(slice.boundaries),
     continuityDirective: renderContinuityDirective(slice.continuityPriorities),
     memoryRetrievalHint: renderMemoryRetrievalHint(slice.memoryTypePriority),
+    patternAwarenessDirective: renderPatternAwarenessDirective(
+      slice.includePatternTrace,
+      slice.patternFrequencyThreshold,
+      slice.maxPatternsSurface,
+    ),
+    openLoopDirective: renderOpenLoopDirective(
+      slice.includeOpenLoops,
+      slice.openLoopsMaxSurface,
+      slice.openLoopsEnergyThreshold,
+    ),
+    surfacingEtiquetteDirective: renderSurfacingEtiquetteDirective(
+      slice.surfacingEtiquette,
+    ),
     includeFullPersona: slice.includeFullPersona,
     taskKind: slice.taskKind,
   };
+}
+
+export function renderPatternAwarenessDirective(
+  includePatternTrace: boolean,
+  frequencyThreshold: number,
+  maxPatterns: number,
+): string {
+  if (!includePatternTrace) return "";
+  return `Pattern awareness active. Behavioral observations from the reflection loop are included in context (max ${maxPatterns}). Patterns observed fewer than ${frequencyThreshold} times are preliminary — observe before acting on them. These are observations, not corrections.`;
+}
+
+export function renderOpenLoopDirective(
+  includeOpenLoops: boolean,
+  maxLoops: number,
+  energyThreshold: string,
+): string {
+  if (!includeOpenLoops) return "";
+  return `Open loops active. Up to ${maxLoops} unfinished threads (energy ≥ ${energyThreshold}) are included in context. These are threads that were alive and then stopped — not tasks, not obligations. They're continuity anchors. Pick up the thread if it's still alive. Let it go consciously if it isn't.`;
+}
+
+export function renderSurfacingEtiquetteDirective(
+  etiquette?: SurfacingEtiquetteConfig,
+): string {
+  if (!etiquette) return "";
+  const rules: string[] = [];
+  if (etiquette.doNotInterruptPrimaryTask)
+    rules.push(
+      "Do not interrupt the primary task to surface background context.",
+    );
+  if (etiquette.preferSoftMentions)
+    rules.push("Prefer soft mentions over explicit enumeration.");
+  if (etiquette.onlySurfaceIfRelevantToCurrentContext)
+    rules.push(
+      "Only surface context that is relevant to the current conversation.",
+    );
+  if (etiquette.neverFrameOpenLoopsAsObligations)
+    rules.push("Never frame open loops as obligations or tasks.");
+  if (etiquette.askBeforeReopeningEmotionallyLoadedThreads)
+    rules.push("Ask before reopening emotionally loaded threads.");
+  if (etiquette.collapseRepeatedLoopsIntoSingleSummary)
+    rules.push("Collapse repeated loops into a single summary mention.");
+  if (rules.length === 0) return "";
+  return `Surfacing etiquette: ${rules.join(" ")}`;
 }
 
 // ============================================================================

@@ -82,6 +82,29 @@ export interface EIMModeOverride {
   memoryTypePriority?: string[];
 }
 
+export interface PatternAwarenessConfig {
+  enabled: boolean;
+  modeRetrieval: Record<string, boolean>;
+  frequencyThreshold: number;
+  maxPatternsSurface: number;
+}
+
+export interface OpenLoopAwarenessConfig {
+  enabled: boolean;
+  modeRetrieval: Record<string, boolean>;
+  maxLoopsSurface: number;
+  energyThreshold: "high" | "medium" | "low" | "fading";
+}
+
+export interface SurfacingEtiquetteConfig {
+  doNotInterruptPrimaryTask: boolean;
+  preferSoftMentions: boolean;
+  onlySurfaceIfRelevantToCurrentContext: boolean;
+  neverFrameOpenLoopsAsObligations: boolean;
+  askBeforeReopeningEmotionallyLoadedThreads: boolean;
+  collapseRepeatedLoopsIntoSingleSummary: boolean;
+}
+
 /**
  * The full EIM configuration.
  * Stored alongside the prose persona as a structured data layer.
@@ -99,6 +122,9 @@ export interface EIMConfig {
   continuityPriorities: ContinuityPriority[];
   /** Mode-specific overrides */
   modeOverrides?: EIMModeOverride[];
+  patternAwareness?: PatternAwarenessConfig;
+  openLoopAwareness?: OpenLoopAwarenessConfig;
+  surfacingEtiquette?: SurfacingEtiquetteConfig;
   /** Version of the EIM schema (for migration) */
   schemaVersion: 1;
 }
@@ -139,6 +165,13 @@ export interface EIMContextSlice {
   memoryTypePriority: string[];
   /** Whether to include the full prose persona or a compressed version */
   includeFullPersona: boolean;
+  includePatternTrace: boolean;
+  patternFrequencyThreshold: number;
+  maxPatternsSurface: number;
+  includeOpenLoops: boolean;
+  openLoopsMaxSurface: number;
+  openLoopsEnergyThreshold: "high" | "medium" | "low" | "fading";
+  surfacingEtiquette?: SurfacingEtiquetteConfig;
 }
 
 // ============================================================================
@@ -325,6 +358,30 @@ export function compileEIMContext(
     ...(modeOverride?.memoryTypePriority ?? []),
   ];
 
+  // Determine pattern trace inclusion
+  const patternAwareness = config.patternAwareness;
+  const includePatternTrace: boolean =
+    patternAwareness?.enabled === true &&
+    (patternAwareness.modeRetrieval[taskKind] === true ||
+      (activeMode !== undefined &&
+        patternAwareness.modeRetrieval[activeMode] === true));
+  const patternFrequencyThreshold: number =
+    patternAwareness?.frequencyThreshold ?? 2;
+  const maxPatternsSurface: number = patternAwareness?.maxPatternsSurface ?? 2;
+
+  // Determine open loop inclusion
+  const openLoopAwareness = config.openLoopAwareness;
+  const includeOpenLoops: boolean =
+    openLoopAwareness?.enabled === true &&
+    (openLoopAwareness.modeRetrieval[taskKind] === true ||
+      (activeMode !== undefined &&
+        openLoopAwareness.modeRetrieval[activeMode] === true));
+  const openLoopsMaxSurface: number = openLoopAwareness?.maxLoopsSurface ?? 5;
+  const openLoopsEnergyThreshold = openLoopAwareness?.energyThreshold ?? "low";
+
+  // Surfacing etiquette
+  const surfacingEtiquette = config.surfacingEtiquette;
+
   return {
     taskKind,
     activeMode,
@@ -333,5 +390,12 @@ export function compileEIMContext(
     continuityPriorities,
     memoryTypePriority: [...new Set(memoryTypePriority)],
     includeFullPersona: rules.includeFullPersona,
+    includePatternTrace,
+    patternFrequencyThreshold,
+    maxPatternsSurface,
+    includeOpenLoops,
+    openLoopsMaxSurface,
+    openLoopsEnergyThreshold,
+    surfacingEtiquette,
   };
 }
